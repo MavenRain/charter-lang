@@ -1,0 +1,2 @@
+def early : Nat := late
+def late : Nat := 1

@@ -1,0 +1,10 @@
+-- The sample domain in use, with the indexed family Lot (former F15).
+def bolt : Item := makeItem red 3 10
+def nut : Item := makeItem blue 1 40
+def stock : List Item := cons bolt (cons nut nil)
+def stockTotal : Nat := total stock
+def stockRed : Nat := redTotal stock
+def pile : Stack := push 1 (push 2 bottom)
+def pileDepth : Nat := depth pile
+def lot : Lot 3 := makeLot 3 250
+def lotCost : Nat := lotPrice lot

@@ -1,0 +1,7 @@
+tcc -v: tcc version 0.9.28rc 2026-09-04 mob@0fb54300 (AArch64 Darwin)
+tcc path: /Users/oobi/.local/bin/tcc
+node --version: v23.10.0
+wasm-validate --version: 1.0.39
+wasm-objdump --version: 1.0.39
+The gate uses node, wasm-validate and wasm-objdump from /opt/homebrew/bin.
+Validation: make -C hosts/tcc-wasm check GREEN on 2026-10-08.

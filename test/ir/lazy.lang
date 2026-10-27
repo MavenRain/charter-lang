@@ -1,0 +1,3 @@
+-- A lazy trap. The second field of the pair overflows after two steps, but
+-- the entry reads only the first field. `langc eval lazy 3` gives 3.
+def lazy : (n : Nat) -> Nat := fun (n : Nat) => first (fold (fun (p : Prod Nat Nat) => pair (natAdd (first p) 1) (natMul (second p) 18446744073709551615)) (pair 0 2) n)

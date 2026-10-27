@@ -1,0 +1,1 @@
+def wrong : Nat := (fun n => n) 3

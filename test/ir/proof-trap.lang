@@ -1,0 +1,6 @@
+def evidence : Nat -> Eq Nat 0 0 := fun n => flagIf (natEq (natAdd n 1) 0) refl refl
+def proofMove : Nat -> Nat := fun n => transport (fun (x : Nat) => Nat) (evidence n) 7
+def proofSymm : Nat -> Nat := fun n => transport (fun (x : Nat) => Nat) (symm (evidence n)) 7
+def baseProof : Eq Nat 0 0 := refl
+def proofTrans : Nat -> Nat := fun n => transport (fun (x : Nat) => Nat) (trans baseProof (evidence n)) 7
+def proofCong : Nat -> Nat := fun n => transport (fun (x : Nat) => Nat) (cong (fun (x : Nat) => x) (evidence n)) 7

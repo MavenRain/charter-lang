@@ -1,0 +1,1 @@
+def wrong : Nat := 3 4

@@ -1,0 +1,4 @@
+-- Former F14: universes. Type 0 : Type 1, with no cumulativity.
+def Small : Type 1 := Type 0
+def Number : Type 0 := Nat
+def Endo : Type 1 := (A : Type 0) -> (x : A) -> A

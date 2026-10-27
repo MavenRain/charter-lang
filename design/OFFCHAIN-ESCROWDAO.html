@@ -1,0 +1,666 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Off-Chain EscrowDAO</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=STIX+Two+Text:ital,wght@0,400;0,600;1,400;1,600&display=swap">
+<style>
+/* Layout: one reading column near 68ch; AMS-style theorem environments; booktabs tables that scroll in their own frame. */
+:root {
+  --paper: #f5f6f8;
+  --ink: #161a22;
+  --muted: #566074;
+  --rule: #d3d8e1;
+  --panel: #e9ecf2;
+  --accent: #1f4b8a;
+  --font-body: "STIX Two Text", "STIX Two", Cambria, Georgia, serif;
+  --font-head: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1218; --ink: #e2e6ed; --muted: #9aa4b6; --rule: #2b323e; --panel: #181d26; --accent: #91b4ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1218; --ink: #e2e6ed; --muted: #9aa4b6; --rule: #2b323e; --panel: #181d26; --accent: #91b4ff;
+  color-scheme: dark;
+}
+body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 1.0625rem; line-height: 1.62; }
+.page {
+  max-width: 46rem; margin: 0 auto;
+  padding-block: 3rem 5rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+p, li { text-wrap: pretty; }
+.eyebrow { font-family: var(--font-head); font-weight: 500; font-size: .8rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 .6rem; }
+h1 { font-family: var(--font-body); font-weight: 600; font-size: clamp(2rem, 6vw, 2.7rem); line-height: 1.12; margin: 0 0 .8rem; text-wrap: balance; }
+.subtitle { font-size: 1.15rem; color: var(--muted); margin: 0 0 1.6rem; max-width: 40rem; }
+.meta { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: 0 0 2rem; font-size: .95rem; }
+.meta dt { font-family: var(--font-head); font-weight: 600; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: .18rem; }
+.meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 30rem) { .meta { grid-template-columns: 1fr; } .meta dd { margin-bottom: .5rem; } }
+.abstract { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding-block: 1rem; margin-block: 0 2rem; }
+.runin { font-weight: 600; }
+h2 { font-family: var(--font-head); font-weight: 600; font-size: 1.02rem; letter-spacing: .07em; text-transform: uppercase; margin: 3.2rem 0 1rem; padding-top: .9rem; border-top: 2px solid var(--ink); text-wrap: balance; }
+h2 .no { color: var(--accent); margin-right: .55rem; }
+h3 { font-family: var(--font-head); font-weight: 600; font-size: 1rem; letter-spacing: .02em; margin: 2rem 0 .6rem; text-wrap: balance; }
+h3 .no { color: var(--accent); margin-right: .45rem; }
+.toc ol { margin: 0; padding-left: 1.4rem; columns: 2 16rem; column-gap: 2rem; }
+.toc li { break-inside: avoid; }
+.env { margin-block: 1.3rem; }
+.env > p { margin-block: .5rem; }
+.thm > p { font-style: italic; }
+.hd { font-weight: 600; font-style: normal; }
+.nm { font-style: normal; }
+.proof > p:first-child .pf { font-style: italic; }
+.qed { float: right; margin-left: .6rem; }
+.env::after { content: ""; display: block; clear: both; }
+ul, ol { padding-left: 1.4rem; }
+li { margin-block: .3rem; }
+code { font-family: var(--font-mono); font-size: .86em; }
+.tw { overflow-x: auto; margin-block: 1.2rem 1.6rem; }
+table { border-collapse: collapse; width: 100%; font-size: .93rem; line-height: 1.45; }
+table.wide { min-width: 42rem; }
+caption { caption-side: top; text-align: left; font-family: var(--font-head); font-weight: 600; font-size: .85rem; letter-spacing: .04em; color: var(--muted); padding-bottom: .45rem; }
+thead th { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: .84rem; letter-spacing: .03em; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink); padding: .45rem .6rem; vertical-align: bottom; }
+tbody td { padding: .45rem .6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 2px solid var(--ink); }
+td.k { white-space: nowrap; font-variant-numeric: tabular-nums; }
+pre.code { background: var(--panel); color: var(--ink); font-family: var(--font-mono); font-size: .8rem; line-height: 1.55; padding: 1rem 1.1rem; overflow-x: auto; border-radius: 3px; margin-block: 1.2rem; }
+mjx-container[display="true"] { overflow-x: auto; overflow-y: hidden; max-width: 100%; padding-block: .15rem; }
+.note { color: var(--muted); font-size: .95rem; }
+.closing { border-top: 2px solid var(--ink); margin-top: 3rem; padding-top: 1rem; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['\\(', '\\)']],
+    displayMath: [['\\[', '\\]']],
+    tags: 'none',
+    macros: {
+      llbracket: '\\mathopen{[\\![}',
+      rrbracket: '\\mathclose{]\\!]}',
+      sem: ['\\llbracket #1 \\rrbracket', 1],
+      Agg: '\\mathrm{Aggregation}',
+      Gov: '\\mathrm{Gov}',
+      Obj: '\\mathrm{Obj}',
+      Kwf: 'K_{\\mathrm{wf}}',
+      Eoff: 'E_{\\mathrm{off}}',
+      Ready: '\\mathrm{Ready}',
+      Valid: '\\mathrm{Valid}',
+      Dec: '\\mathrm{Dec}',
+      Eval: '\\mathrm{Eval}',
+      Amd: '\\mathrm{Amd}',
+      act: '\\mathrm{act}',
+      orb: '\\mathrm{orbitProjection}',
+      Sym: '\\mathrm{Sym}',
+      Tally: '\\mathrm{Tally}',
+      supp: '\\operatorname{supp}',
+      kl: '\\mathbin{>\\!\\!=\\!\\!>}',
+      app: '\\mathbin{+\\!\\!+}',
+      some: '\\mathsf{some}',
+      none: '\\mathsf{none}'
+    }
+  },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js" defer></script>
+
+<main class="page">
+
+<header>
+<p class="eyebrow">escrow-lang · design note</p>
+<h1>Off-Chain EscrowDAO</h1>
+<p class="subtitle">A denotational design, in Conal Elliott's sense, for a ZK+FHE+MPC escrow protocol that runs off-chain under threshold-authorized, self-amending governance.</p>
+<dl class="meta">
+<dt>Modifies</dt><dd><code>design/DENOTATIONAL-DESIGN.md</code> of <a href="https://github.com/MavenRain/escrow-lang">MavenRain/escrow-lang</a>, called the on-chain design below</dd>
+<dt>Governance base</dt><dd><code>SelfReferentialDAO.lean</code> of <a href="https://github.com/MavenRain/self-referential-dao">MavenRain/self-referential-dao</a></dd>
+<dt>Date</dt><dd>2026-10-26</dd>
+<dt>Status</dt><dd>Draft. Open items are in section 9. Labels such as O13 cite the open items of escrow-lang <code>SPEC.md</code>.</dd>
+</dl>
+</header>
+
+<section class="abstract">
+<p><span class="runin">Abstract.</span> The on-chain design gives a governed escrow the meaning \(\Sigma\,(L : \Agg\,\act\,F).\ E\) and represents it as EVM storage. This note keeps that meaning and moves the representation off-chain. The constitution \(\kappa\) that fixes \(F\) becomes part of the state, and \(\kappa\) amends itself by a threshold vote. The representation becomes a hash-chained transcript, signed by a threshold of members, over ciphertexts under a shared FHE key, with a zero-knowledge proof for each secret input. The meaning gains a leakage map \(\ell\), which states what the public may learn. The protocol is correct when each transcript entry agrees with the meaning. It is private when the public view is a function of \(\ell\).</p>
+</section>
+
+<nav class="toc" aria-label="Contents">
+<ol start="0">
+<li><a href="#changes">Changes from the on-chain design</a></li>
+<li><a href="#stance">Stance</a></li>
+<li><a href="#domain">Semantic domain</a></li>
+<li><a href="#transcript">Meaning of the transcript</a></li>
+<li><a href="#ops">Meaning of the operations</a></li>
+<li><a href="#leakage">Leakage and the ideal functionality</a></li>
+<li><a href="#regimes">What the regimes mean for the escrow</a></li>
+<li><a href="#rep">Protocol representation sketch</a></li>
+<li><a href="#nothom">What is deliberately not a homomorphism</a></li>
+<li><a href="#open">Open items</a></li>
+</ol>
+</nav>
+
+<!-- ============================================================ -->
+<section id="changes">
+<h2><span class="no">0</span>Changes from the on-chain design</h2>
+<p>The table lists each component that this design changes. Each component that it does not list keeps its on-chain meaning.</p>
+<div class="tw">
+<table class="wide">
+<thead><tr><th>Component</th><th>On-chain design</th><th>This design</th><th>Section</th></tr></thead>
+<tbody>
+<tr><td>Meaning of governance</td><td>\(\Agg\,\act\,F\), with \(F\) fixed at deployment</td><td>\(\Sigma\,(\kappa : \Kwf).\ \Agg\,\act_M\,F_\kappa\); \(\kappa\) amends itself</td><td class="k">2.3, 4.8</td></tr>
+<tr><td>Configurations</td><td>complete, \(D^M\)</td><td>partial, \((D_E \uplus \{\bot\})^M\)</td><td class="k">2.2</td></tr>
+<tr><td>Readiness of a verdict</td><td>every member voted (O13)</td><td>the voters form a coalition in \(\mathcal{A}_t\)</td><td class="k">2.2, 4.4</td></tr>
+<tr><td>Ballot store</td><td>member address to ballot, in clear</td><td>nullifier to ciphertext; the verdict needs only the orbit</td><td class="k">2.6, 7</td></tr>
+<tr><td>Order and time</td><td>block order</td><td>position in the transcript; no clock</td><td class="k">2.7, 3</td></tr>
+<tr><td>Authorization</td><td>caller is in <code>memberAddresses</code></td><td>threshold signature by a coalition in \(\mathcal{A}_t\) on every entry; the prefix fixes \(t\)</td><td class="k">3.2</td></tr>
+<tr><td>Deposit amount</td><td>\(n \le \mathrm{callvalue}\); the excess has no record</td><td>\(n = \nu\,\iota\) for a single-use receipt \(\iota\)</td><td class="k">4.1</td></tr>
+<tr><td>Guard \(n \le \mathrm{ledger}\,p\)</td><td>runtime guard</td><td>theorem (Invariant I); no comparison on ciphertexts</td><td class="k">4.4</td></tr>
+<tr><td>Settle</td><td>case split on \(X_c\), read in clear</td><td>case split under FHE; only the closed bit is decrypted</td><td class="k">4.4, 7.3</td></tr>
+<tr><td>Withdraw</td><td>debit, then send and run the recipient \(C^{\Gamma}_{a,n}\)</td><td>debit and one voucher; no code runs at the recipient</td><td class="k">4.5</td></tr>
+<tr><td>Reading a credit</td><td>storage is public</td><td><code>balance</code>, a private output</td><td class="k">4.6</td></tr>
+<tr><td>Amendment</td><td><code>amend</code> = \(\Gov\), writes nothing (O5)</td><td><code>motion</code> and <code>enact</code> change \(\kappa\); <code>amend</code> stays \(\Gov\)</td><td class="k">4.7 to 4.9</td></tr>
+<tr><td>Arrow-impossibility</td><td>reachable; funds frozen</td><td>excluded by the type of <code>motion</code></td><td class="k">4.7, 6</td></tr>
+<tr><td>What the public sees</td><td>all storage</td><td>the records that \(\ell\) names</td><td class="k">5</td></tr>
+<tr><td>Evidence of correctness</td><td>differential tests against geth</td><td>the homomorphism square at each entry: public recomputation and proofs</td><td class="k">1.1, 7.2</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="stance">
+<h2><span class="no">1</span>Stance</h2>
+<p>Elliott's rule is that the instance's meaning is the meaning's instance. The on-chain design applies it to a contract. This design applies it to a protocol and keeps the four rules of the on-chain stance:</p>
+<ul>
+<li>The core model is not ciphertexts, key shares, proofs, signatures or messages. The protocol context \(\Gamma\) (section 2.6) holds the inputs of the adapter, as on-chain.</li>
+<li>\(\sem{\cdot}\) is total.</li>
+<li>An operation \(\mathrm{op}\) on the representation is admitted only when there is an \(\mathrm{op}'\) on the model with \(\sem{\mathrm{op}\,a\,b} = \mathrm{op}'\,\sem{a}\,\sem{b}\).</li>
+<li>A failed homomorphism is an abstraction leak. The design rejects it and does not patch it.</li>
+</ul>
+<p>Two rules are new:</p>
+<ul>
+<li>The meaning includes a leakage map \(\ell\) (section 5). If the representation reveals more than \(\ell\) names, that is an abstraction leak too.</li>
+<li>Each cryptographic technique answers to one equation (section 1.1), and each representation type has a meaning function (section 1.2).</li>
+</ul>
+
+<h3 id="s1-1"><span class="no">1.1</span>One equation for each technique</h3>
+\[ \Dec_{sk}\,(\Eval_f\,c) \;=\; f\,(\Dec_{sk}\,c) \tag{1.1} \]
+<p><span class="runin">FHE.</span> Decryption is the meaning function on ciphertexts: \(\sem{c} := \Dec_{sk}\,c\). Then (1.1) reads \(\sem{\Eval_f\,c} = f\,\sem{c}\). Homomorphic evaluation is a type class morphism in Elliott's sense. The word homomorphic means the same thing in both fields.</p>
+\[ \mathrm{Check}(e_i) \;\Longrightarrow\; \sem{r_i} \;=\; \sem{\mathrm{op}_i}\,\sem{r_{i-1}} \tag{1.2} \]
+<p><span class="runin">ZK.</span> Entry \(e_i\) takes the representation from \(r_{i-1}\) to \(r_i\). \(\mathrm{Check}\) verifies the proofs for the secret inputs of \(e_i\) and recomputes each public evaluation. Together they certify one instance of the homomorphism square. A verifier checks the square at every entry. On-chain, differential tests against geth checked agreement on sample inputs only.</p>
+\[ sk \;=\; \textstyle\sum_{i \in S} \lambda^{S}_{i}\, sk_i \qquad (S \in \mathcal{A}_t) \tag{1.3} \]
+<p><span class="runin">Threshold MPC.</span> No party holds \(sk\). A coalition \(S\) in the access structure \(\mathcal{A}_t\) (Definition 2.3) can combine its shares, and a smaller coalition cannot. Equation (1.3) shows the Shamir case; a lattice scheme combines partial decryptions instead. So \(\sem{\cdot}\) is total as a function, and only a coalition in \(\mathcal{A}_t\) can compute it. The protocol lets such a coalition compute it only at the points that \(\ell\) names.</p>
+<p>In cryptographic terms the denotation is the ideal functionality (section 5). Elliott's homomorphism condition is the correctness half of realizing it. The leakage rule is the privacy half.</p>
+
+<h3 id="s1-2"><span class="no">1.2</span>Meaning of the representation types</h3>
+<div class="tw">
+<table class="wide">
+<thead><tr><th>Representation type</th><th>Meaning</th><th>Meaning function</th><th>Who can evaluate it</th></tr></thead>
+<tbody>
+<tr><td>\(\mathrm{Ct}_e\,\alpha\), a ciphertext of epoch \(e\)</td><td>\(\alpha\)</td><td>\(\Dec_{sk_e}\)</td><td>a coalition in \(\mathcal{A}_{t_e}\)</td></tr>
+<tr><td>\(\mathrm{Share}_e\,\alpha\), a \(t\)-of-\(n\) sharing</td><td>\(\alpha\)</td><td>reconstruction over a coalition</td><td>a coalition in \(\mathcal{A}_{t_e}\)</td></tr>
+<tr><td>\(\mathrm{Proof}\,P\)</td><td>\(P\), erased</td><td>soundness of the proof system</td><td>anyone checks it</td></tr>
+<tr><td>\(\mathrm{Sig}_e\,m\), a threshold signature</td><td>\(\exists\, S \in \mathcal{A}_{t_e}.\ S\) approves \(m\)</td><td>unforgeability</td><td>anyone checks it</td></tr>
+<tr><td>nullifier set of subject \(u\)</td><td>\(\supp X_u\), up to a bijection that no party knows</td><td>Proposition 2.7</td><td>anyone reads its size</td></tr>
+<tr><td>transcript \(w\)</td><td>the composite \(\sem{w}\)</td><td>Theorem 3.1</td><td>anyone</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="domain">
+<h2><span class="no">2</span>Semantic domain</h2>
+<p>As on-chain: two independent meanings, then their dependent pairing. The governance meaning now carries its own constitution.</p>
+
+<h3 id="s2-1"><span class="no">2.1</span>Fixed parameters</h3>
+<p>No amendment changes these parameters.</p>
+<ul>
+<li><span class="runin">Decisions.</span> Escrow decisions \(D_E = \{\mathrm{Release}, \mathrm{Refund}, \mathrm{Hold}\}\), the on-chain \(D\), with ballots \(B_E = D_E\). Amendment ballots \(B_A = \{\mathrm{Adopt}, \mathrm{Reject}\}\) and amendment decisions \(D_A = \{\mathrm{Adopt}, \mathrm{Reject}, \mathrm{Hold}\}\). The value \(\bot\) means no ballot. All of these are discrete categories.</li>
+<li><span class="runin">Assets.</span> A cancellative commutative monoid \(A\), as on-chain, ordered by \(a \le b \iff \exists d.\ a + d = b\).</li>
+<li><span class="runin">The rail.</span> The outside world that holds the assets. It issues receipts \(\iota \in \mathrm{Receipt}\) with value \(\nu : \mathrm{Receipt} \to A\) and pays vouchers \((a, n, i) \in \mathrm{Voucher} = \mathrm{Address} \times A \times \mathbb{N}\). The meaning ends at the rail.</li>
+<li><span class="runin">Fault bound.</span> \(f(n) = \lfloor (n - 1)/3 \rfloor\) for \(n\) members.</li>
+<li><span class="runin">The rest.</span> The meaning of each operation (section 4), the leakage map \(\ell\) (section 5) and conditions W1 to W3 (Definition 2.4).</li>
+</ul>
+
+<h3 id="s2-2"><span class="no">2.2</span>Constitutions</h3>
+<div class="env def" id="def-2-1"><p><span class="hd">Definition 2.1</span> <span class="nm">(Constitution).</span> A constitution is a tuple \(\kappa = (M, t, t_A, F)\). \(M\) is a finite nonempty set of members, and \(n = |M|\). \(t\) is the escrow threshold and \(t_A\) the amendment threshold. \(F : \mathrm{ChoiceRule}\,\Obj_M\,D_E\) is the choice rule, where \(\Obj_M = (D_E \uplus \{\bot\})^M\) is the discrete category of partial configurations. \(\Sym(M)\) acts on \(\Obj_M\) by \((g \cdot X)(m) = X(g^{-1} m)\); write \(\act_M\) for this action.</p></div>
+<p>On-chain, \(F\) was read only at complete configurations (O13). Here a verdict can be read once a quorum has voted, so \(F\) takes partial configurations, and \(\bot\) is a ballot value with its own count.</p>
+<div class="env def" id="def-2-2"><p><span class="hd">Definition 2.2</span> <span class="nm">(Tally).</span> \(\Tally_M = \{\, c : D_E \uplus \{\bot\} \to \mathbb{N} \mid \textstyle\sum_d c(d) = n \,\}\) and \(\tau : \Obj_M \to \Tally_M\), \(\tau(X)(d) = |X^{-1}(d)|\). Two configurations have one tally exactly when one is a permutation of the other. So \(\tau\) is the orbit projection of \(\act_M\), with the orbits identified with tallies.</p></div>
+<div class="env def" id="def-2-3"><p><span class="hd">Definition 2.3</span> <span class="nm">(Access structure, readiness).</span> \(\mathcal{A}_t = \{\, S \subseteq M \mid |S| \ge t \,\}\). For a configuration \(X\), \(\supp X = \{\, m \mid X\,m \ne \bot \,\}\) and \(\Ready_t(X) :\iff \supp X \in \mathcal{A}_t\).</p></div>
+<p>\(\mathcal{A}_t\) is closed upward and invariant under \(\Sym(M)\). So \(\Ready_t\) depends only on the tally: \(\Ready_t(X) \iff n - \tau(X)(\bot) \ge t\). The on-chain readiness is \(\Ready_n\).</p>
+<div class="env def" id="def-2-4"><p><span class="hd">Definition 2.4</span> <span class="nm">(Well-formed constitutions).</span> \(\Kwf\) is the set of constitutions with</p>
+<p>(W1) \(n + f(n) \lt 2t\) and \(t \le n - f(n)\);<br>
+(W2) \(t \le t_A \le n\);<br>
+(W3) \(F(g \cdot X) = F(X)\) for all \(g \in \Sym(M)\) and \(X \in \Obj_M\).</p></div>
+<p>W1 makes any two quorums share more than \(f(n)\) members (Proposition 3.4). It also lets the members outside any \(f(n)\) form a quorum. For \(n = 4\), \(f(n) = 1\) and \(t = 3\). For \(n = 7\), \(f(n) = 2\) and \(t = 5\). Under W3, \(F = \theta \circ \tau\) for one table \(\theta : \Tally_M \to D_E\). The representation stores \(\theta\), as the on-chain contract stores its packed verdict table.</p>
+<div class="env def" id="ex-2-5"><p><span class="hd">Example 2.5</span> <span class="nm">(Threshold rule).</span> \(F_t = \theta_t \circ \tau\) with</p>
+\[ \theta_t(c) = \begin{cases} \mathrm{Release} &amp; c(\mathrm{Release}) \ge t \\ \mathrm{Refund} &amp; c(\mathrm{Refund}) \ge t \\ \mathrm{Hold} &amp; \text{otherwise.} \end{cases} \]
+<p>W1 gives \(2t \gt n\), so at most one of the first two cases holds.</p></div>
+<div class="env thm" id="prop-2-6"><p><span class="hd">Proposition 2.6</span> <span class="nm">(Aggregation at a discrete \(D\)).</span> Let \(D\) be discrete. \(\Agg\,\act_M\,F\) is inhabited if and only if \(F\) is constant on orbits, and then it has exactly one element. So each \(\kappa \in \Kwf\) has exactly one aggregation \(L_\kappa\), and \(F_\kappa\) is self-constituting.</p></div>
+<div class="env proof"><p><span class="pf">Proof.</span> The fibers of the orbit projection are the orbits. The pointwise left Kan extension at an orbit is a colimit of \(F\) over that orbit, which is a connected diagram. In a discrete category such a colimit exists if and only if the diagram is constant, and then it is that constant. Self-constitution at a discrete \(D\) reduces to constancy on orbits, as escrow-lang records for its discrete \(D\). <span class="qed">∎</span></p></div>
+
+<h3 id="s2-3"><span class="no">2.3</span>Governance</h3>
+\[ \mathcal{G} \;=\; \Sigma\,(\kappa : \Kwf).\ \Agg\,\act_M\,F_\kappa \;=\; \Sigma\,(\kappa : \Kwf).\ \mathrm{LeftKanExtension}\,(\orb\,\act_M)\,F_\kappa \]
+\[ \Gov(\kappa, L) = \orb\,\act_M \ggg L.\mathrm{functor}, \qquad \mathrm{verdict}(\kappa, L, X) = (\Gov(\kappa, L)).\mathrm{obj}\,X = \theta_\kappa(\tau X). \]
+<p>Anonymity is enforced by the orbit projection, and legitimacy is the Lan universal property (\(\mathrm{unit}\), \(\mathrm{desc}\), \(\mathrm{fac}\), \(\mathrm{uniq}\)), as in the DAO design. By Proposition 2.6 the second component is determined by the first. The design keeps the pair because the operations and theorems of the DAO design are stated on \(L\).</p>
+
+<h3 id="s2-4"><span class="no">2.4</span>Escrow</h3>
+\[ \Eoff \;=\; (\mathrm{ledger} : \mathrm{Address} \to A) \times (\mathrm{credit} : \mathrm{Address} \to A) \times (\mathrm{claims} : \mathrm{List}\,\mathrm{Claim}) \times (\mathrm{spent} : \mathrm{Fin}\,\mathrm{Receipt}) \]
+<p>A claim is a triple \((p, q, n)\) of payer, payee and amount. The first three components are the on-chain \(E\). The fourth records the receipts already used, so that one receipt funds one claim only. No release predicate lives in \(\Eoff\). The predicate is not data.</p>
+
+<h3 id="s2-5"><span class="no">2.5</span>Governed escrow</h3>
+\[ \sem{\mathrm{EscrowDAO}_{\mathrm{off}}} \;=\; \Sigma\,(\kappa : \Kwf).\ \Sigma\,(L : \Agg\,\act_M\,F_\kappa).\ \Eoff \tag{2.1} \]
+<p>The on-chain meaning is the fiber of (2.1) at one fixed \(\kappa\). Settlement still reads the verdict out of \((\kappa, L)\) and never out of storage. So the rule that moves funds is the rule that the members constitute, and now also the rule that they amend.</p>
+
+<h3 id="s2-6"><span class="no">2.6</span>Protocol context</h3>
+<p>The adapter context of the on-chain design becomes the protocol context \(\Gamma = (e, \Gamma_E, \Gamma_A)\):</p>
+<ul>
+<li>\(e \in \mathbb{N}\) is the epoch: the number of adopted amendments.</li>
+<li>\(\Gamma_E(c) = (\text{claim}, \text{closed flag}, X_c)\) for each claim index \(c\), in insertion order, with \(X_c \in \Obj_M\).</li>
+<li>\(\Gamma_A(j) = (\kappa'_j, \text{closed flag}, Y_j)\) for each motion index \(j\), with \(Y_j \in (B_A \uplus \{\bot\})^M\).</li>
+</ul>
+<p>A subject \(u\) is a claim index or a motion index, with ballot space \(B_u\) equal to \(B_E\) or \(B_A\). Write \(X_u\) for the configuration of \(u\). The full state is \(\hat S = (\kappa, L, s, \Gamma)\), with core projection \(\pi(\kappa, L, s, \Gamma) = (\kappa, L, s)\) and escrow projection \(\pi_E(\kappa, L, s, \Gamma) = s\). The open claims of \(s\) are the open records of \(\Gamma_E\) in insertion order, as on-chain.</p>
+<div class="env thm" id="prop-2-7"><p><span class="hd">Proposition 2.7</span> <span class="nm">(Anonymity is representation independence).</span> Fix a subject \(u\) in epoch \(e\). Let \(N_u = \{\mathrm{nf}_m(e, u) \mid m \in M\}\) be the nullifiers of the members on \(u\), and let \(X' : N_u \to B_u \uplus \{\bot\}\) be the stored ballots, with \(\bot\) at each nullifier not yet published. The meaning is \(X_u = X' \circ \varphi\) for the bijection \(\varphi : M \to N_u\), \(m \mapsto \mathrm{nf}_m(e, u)\), which no party knows in full. For every bijection \(\psi : M \to N_u\), \(\mathrm{verdict}(\kappa, L, X' \circ \psi) = \mathrm{verdict}(\kappa, L, X' \circ \varphi)\), and \(\Ready_t\) agrees on the two configurations.</p></div>
+<div class="env proof"><p><span class="pf">Proof.</span> \(X' \circ \psi = (X' \circ \varphi) \circ (\varphi^{-1} \circ \psi)\), and \(\varphi^{-1} \circ \psi \in \Sym(M)\). So the two configurations lie in one orbit. The verdict is constant on orbits by <code>lan_implies_orbit_constant</code>, re-exported, and \(\Ready_t\) is constant on orbits by Definition 2.3. <span class="qed">∎</span></p></div>
+<p>So the protocol computes the verdict without learning which member cast which ballot. On-chain, anonymity held for the verdict only, and the ballot of each member address was public. Here the representation keeps it too.</p>
+
+<h3 id="s2-7"><span class="no">2.7</span>Time</h3>
+<p>There is no clock. Time is the position in the transcript (section 3), and the epoch \(e\) counts adopted amendments. A deadline must be stated as a count of entries. This design states none (open item O-off-5).</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="transcript">
+<h2><span class="no">3</span>Meaning of the transcript</h2>
+
+<h3 id="s3-1"><span class="no">3.1</span>Operations denote Kleisli arrows</h3>
+<p>Each operation may be undefined, and it may give vouchers to the rail. So it denotes a Kleisli arrow of a partial writer monad:</p>
+\[ T\,Z = 1 + Z \times \mathrm{List}\,\mathrm{Voucher}, \qquad \sem{\mathrm{op}} : \hat S \to T\,\hat S, \]
+\[ (\alpha \kl \alpha')\,x = \begin{cases} \some(z,\ o \app o') &amp; \alpha\,x = \some(y, o) \text{ and } \alpha'\,y = \some(z, o') \\ \none &amp; \text{otherwise,} \end{cases} \qquad \eta\,x = \some(x, [\,]). \]
+<p>A transcript is a word \(w \in \mathrm{Op}^*\). Its meaning is the fold \(\sem{\varepsilon} = \eta\) and \(\sem{w \cdot \mathrm{op}} = \sem{w} \kl \sem{\mathrm{op}}\).</p>
+<div class="env thm" id="thm-3-1"><p><span class="hd">Theorem 3.1</span> <span class="nm">(The transcript is a monoid homomorphism).</span> \(\sem{w \app w'} = \sem{w} \kl \sem{w'}\) and \(\sem{\varepsilon} = \eta\). So \(\sem{\cdot}\) maps \((\mathrm{Op}^*, \app, \varepsilon)\) into the Kleisli endomorphisms \((\hat S \to T\,\hat S,\ \kl,\ \eta)\).</p></div>
+<div class="env proof"><p><span class="pf">Proof.</span> Induction on \(w'\), with the associativity of \(\kl\) and the unit laws of \(T\). <span class="qed">∎</span></p></div>
+<p>Vouchers come out in transcript order. The length \(|w|\) is the only time in the design.</p>
+
+<h3 id="s3-2"><span class="no">3.2</span>Validity and self-amending authorization</h3>
+<p>An entry pairs an operation with the coalition \(S \subseteq M\) that authorizes it. The representation hides \(S\) behind a threshold signature (section 7.2).</p>
+<div class="env def" id="def-3-2"><p><span class="hd">Definition 3.2</span> <span class="nm">(Valid transcripts).</span> Fix a genesis state \(\hat S_0 = (\kappa_0, L_{\kappa_0}, s_0, \Gamma_0)\) with \(\kappa_0 \in \Kwf\), \(s_0\) empty and \(\Gamma_0 = (0, \varnothing, \varnothing)\). Then \(\Valid(\varepsilon)\), and \(\Valid(w \cdot (\mathrm{op}, S))\) holds if and only if</p>
+\[ \Valid(w) \;\wedge\; \sem{w}\,\hat S_0 = \some(\hat S, V) \;\wedge\; \sem{\mathrm{op}}\,\hat S \ne \none \;\wedge\; S \in \mathcal{A}_{t(\hat S)}, \]
+<p>where \(t(\hat S)\) is the escrow threshold of the constitution in \(\hat S\).</p></div>
+<p>The threshold that authorizes entry \(i + 1\) is read from the meaning of the prefix of length \(i\). No authority outside the transcript decides which coalitions may extend it. That is the sense of self-amending in this design. The on-chain contract never changes its own authorization rule.</p>
+<p>The requester of an operation authorizes it in a separate way: the holder of \(\iota\) for <code>deposit</code>, member \(m\) for <code>vote</code> and <code>motion</code>, and address \(a\) for <code>withdraw</code> and <code>balance</code>. Section 4 names the requester of each operation.</p>
+
+<h3 id="s3-3"><span class="no">3.3</span>What the order can change</h3>
+<p>The members who sequence the transcript choose the order of the requests. The read set and write set of each operation bound what that choice can change.</p>
+<div class="tw">
+<table class="wide">
+<caption>Table 3.1. Footprints over the state components</caption>
+<thead><tr><th>Operation</th><th>Reads</th><th>Writes</th></tr></thead>
+<tbody>
+<tr><td>\(\mathrm{deposit}\,p\,q\,\iota\)</td><td>\(\mathrm{spent}\), the number of claims</td><td>\(\mathrm{ledger}\,p\), \(\mathrm{claims}\), \(\mathrm{spent}\), a new record of \(\Gamma_E\)</td></tr>
+<tr><td>\(\mathrm{vote}\,u\,b\) by \(m\)</td><td>\(e\), \(M\), the closed flag of \(u\)</td><td>\(X_u(m)\)</td></tr>
+<tr><td>\(\mathrm{settle}\,c\)</td><td>\(X_c\), \(\kappa\), \(L\), the claim and closed flag of \(c\)</td><td>\(\mathrm{ledger}\,p_c\), \(\mathrm{credit}\,p_c\), \(\mathrm{credit}\,q_c\), \(\mathrm{claims}\), the closed flag of \(c\)</td></tr>
+<tr><td>\(\mathrm{withdraw}\,n\) by \(a\)</td><td>\(\mathrm{credit}\,a\)</td><td>\(\mathrm{credit}\,a\)</td></tr>
+<tr><td>\(\mathrm{motion}\,\kappa'\)</td><td>\(M\)</td><td>a new record of \(\Gamma_A\)</td></tr>
+<tr><td>\(\mathrm{enact}\,j\)</td><td>\(Y_j\), \(\kappa\), the closed flag of \(j\)</td><td>\(\kappa\), \(L\), \(e\), every \(X_u\) and \(Y_u\), the closed flag of \(j\)</td></tr>
+</tbody>
+</table>
+</div>
+<div class="env thm" id="prop-3-3"><p><span class="hd">Proposition 3.3</span> <span class="nm">(Independent operations commute).</span> If the writes of \(\mathrm{op}_1\) meet neither the reads nor the writes of \(\mathrm{op}_2\), and the writes of \(\mathrm{op}_2\) do not meet the reads of \(\mathrm{op}_1\), then \(\sem{\mathrm{op}_1 \cdot \mathrm{op}_2} = \sem{\mathrm{op}_2 \cdot \mathrm{op}_1}\), up to the positions inside the vouchers.</p></div>
+<p>So the order matters only between dependent operations: a vote and a settle on one claim, two deposits, or an enact and any vote. The meaning does not define a fair order (section 8).</p>
+
+<h3 id="s3-4"><span class="no">3.4</span>One history</h3>
+<div class="env thm" id="prop-3-4"><p><span class="hd">Proposition 3.4</span> <span class="nm">(No fork while faults are bounded).</span> Let \(w\) be valid, let \(\kappa\) be the constitution after \(w\), and let at most \(f(n)\) members of \(\kappa\) be faulty. An honest member signs at most one entry at each position. Then any two valid one-entry extensions of \(w\) are equal.</p></div>
+<div class="env proof"><p><span class="pf">Proof.</span> Let the two entries carry coalitions \(S, S' \in \mathcal{A}_t\). Then \(|S \cap S'| \ge 2t - n \gt f(n)\) by W1, so \(S \cap S'\) holds an honest member. That member signed both entries, so they are equal. <span class="qed">∎</span></p></div>
+<p>So valid transcripts form a chain, and the meaning, a list, never has to denote a tree. A fork of the transcript would let one credit pay two vouchers at the rail. That is a double spend. The Schelling-Ising fork of the on-chain design is a different thing: two mediators inside one history. Key rotation at each adopted <code>enact</code> (section 7.3) stops the members of an old epoch from signing entries after the enact position.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="ops">
+<h2><span class="no">4</span>Meaning of the operations</h2>
+<p>Write \((\kappa, L, s, \Gamma)\) for the full state. If an operation is not defined at a state, the request makes no entry.</p>
+<div class="tw">
+<table class="wide">
+<caption>Table 4.1. Summary of the operations</caption>
+<thead><tr><th>Operation</th><th>Requester</th><th>Defined if</th><th>Core effect \(\pi\)</th><th>Context effect</th><th>Vouchers</th></tr></thead>
+<tbody>
+<tr><td>\(\mathrm{deposit}\,p\,q\,\iota\)</td><td>holder of \(\iota\)</td><td>\(\iota \notin \mathrm{spent}\)</td><td>monoid action on \(\mathrm{ledger}\,p\); new claim</td><td>new open record, no ballots</td><td>none</td></tr>
+<tr><td>\(\mathrm{cast}\,X\)</td><td>anyone</td><td>always</td><td>none</td><td>none</td><td>none</td></tr>
+<tr><td>\(\mathrm{vote}\,u\,b\)</td><td>member \(m\)</td><td>\(m \in M\), \(u\) open, \(b \in B_u\)</td><td>none</td><td>\(X_u(m) := b\)</td><td>none</td></tr>
+<tr><td>\(\mathrm{settle}\,c\)</td><td>anyone</td><td>\(c\) open, \(\Ready_t(X_c)\)</td><td>case split on the verdict</td><td>close \(c\) unless Hold</td><td>none</td></tr>
+<tr><td>\(\mathrm{withdraw}\,n\)</td><td>address \(a\)</td><td>\(n \le \mathrm{credit}\,a\)</td><td>\(\mathrm{credit}\,a \mathrel{-}= n\)</td><td>none</td><td>\((a, n, i)\)</td></tr>
+<tr><td>\(\mathrm{balance}\)</td><td>address \(a\)</td><td>always</td><td>none</td><td>none</td><td>none</td></tr>
+<tr><td>\(\mathrm{motion}\,\kappa'\)</td><td>member</td><td>\(\kappa' \in \Kwf\)</td><td>none</td><td>new open motion</td><td>none</td></tr>
+<tr><td>\(\mathrm{enact}\,j\)</td><td>anyone</td><td>\(j\) open</td><td>\((\kappa, L) := (\kappa'_j, L_{\kappa'_j})\) on Adopt</td><td>close \(j\) unless Hold; on Adopt, \(e + 1\) and no ballots</td><td>none</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="s4-1"><span class="no">4.1</span>Deposit</h3>
+<p>Deposit does not consult governance. It is defined when \(\iota \notin s.\mathrm{spent}\):</p>
+\[ \pi\,\sem{\mathrm{deposit}\,p\,q\,\iota}\,(\kappa, L, s, \Gamma) \;=\; (\kappa, L,\ s\{\mathrm{ledger}\,p \mathrel{+}= \nu\,\iota,\ \mathrm{claims} \mathrel{\app}= (p, q, \nu\,\iota),\ \mathrm{spent} \mathrel{\cup}= \{\iota\}\}). \]
+<p>\(\Gamma_E\) gains an open record \(c\) with \(X_c = \bot^M\). There are no vouchers. Deposit is the monoid action of \(A\) on the ledger, paired with the identity on \((\kappa, L)\). The on-chain entry took an amount \(n\) with \(n \le \mathrm{callvalue}\) and kept the excess without a record. Here the amount is \(\nu\,\iota\), so conservation (Theorem 4.4) is an equation.</p>
+
+<h3 id="s4-2"><span class="no">4.2</span>Cast</h3>
+<p>Cast is unchanged. Its meaning is the unit of the Kan extension:</p>
+\[ \sem{\mathrm{cast}\,X}\,\hat S \;=\; \eta\,(\hat S, [\,]) \quad\text{with evidence}\quad \mathrm{unit}_X : F_\kappa.X \to L.\mathrm{functor}(\orb\,X). \]
+<p>Two ballots in the same orbit denote the same cast. That is <code>lan_implies_orbit_constant</code>, re-exported rather than re-proved. \(F_\kappa\) is public, so any party evaluates cast on its own machine. Cast makes no entry and decrypts nothing.</p>
+
+<h3 id="s4-3"><span class="no">4.3</span>Vote</h3>
+<p>Vote supplies the configurations of the protocol context. It is defined when \(m \in M\), \(u\) is open and \(b \in B_u\):</p>
+\[ \sem{\mathrm{vote}\,u\,b}_m\,(\kappa, L, s, \Gamma) \;=\; \eta\,\big((\kappa, L, s, \Gamma[(u, m) \mapsto b]),\ [\,]\big), \qquad \pi \circ \sem{\mathrm{vote}\,u\,b}_m = \pi. \]
+<p>A later vote of \(m\) on \(u\) in the same epoch replaces the earlier one. The representation finds the earlier ballot by its nullifier, never by \(m\) (Proposition 2.7). One operation serves claims and motions.</p>
+<p>The on-chain example still holds. Take \(n = 3\), \(t = 2\), \(F = F_2\), an open claim \((p, q, 5)\) with \(p \ne q\), and \(\mathrm{ledger}\,p = 5\). Two Release ballots and two Refund ballots leave the same core state. The next \(\mathrm{settle}\,c\) credits 5 to \(q\) in the first case and to \(p\) in the second. So settle on the full state does not factor through \(\pi\).</p>
+
+<h3 id="s4-4"><span class="no">4.4</span>Settle</h3>
+<p>Settle factors through the verdict. For an open claim \(c = (p, q, n)\) with \(\Ready_t(X_c)\), let \(v = \mathrm{verdict}(\kappa, L, X_c) = \theta_\kappa(\tau X_c)\). Then</p>
+\[ \pi\,\sem{\mathrm{settle}\,c}\,(\kappa, L, s, \Gamma) \;=\;
+\begin{cases}
+(\kappa, L,\ s\{\mathrm{ledger}\,p \mathrel{-}= n,\ \mathrm{credit}\,q \mathrel{+}= n,\ \mathrm{claims} \mathrel{-}= c\}) &amp; v = \mathrm{Release} \\
+(\kappa, L,\ s\{\mathrm{ledger}\,p \mathrel{-}= n,\ \mathrm{credit}\,p \mathrel{+}= n,\ \mathrm{claims} \mathrel{-}= c\}) &amp; v = \mathrm{Refund} \\
+(\kappa, L,\ s) &amp; v = \mathrm{Hold.}
+\end{cases} \]
+<p>Release and Refund also close the record of \(c\) in \(\Gamma_E\). Hold changes nothing. The claim stays open, and later votes and a later settle can decide it. Settle sends no funds. It moves \(n\) from the ledger into a credit, which is the monoid action of \(A\) on the credit (O7).</p>
+<p>Settle is not defined until a quorum has voted. On-chain it was not defined until every member had voted (O13), so one absent member blocked every claim. The on-chain Arrow-impossibility regime made settle the empty function. Here W3 excludes that regime (Proposition 2.6).</p>
+<div class="env thm" id="thm-4-1"><p><span class="hd">Theorem 4.1</span> <span class="nm">(Invariant I).</span> For every valid \(w\) with \(\sem{w}\,\hat S_0 = \some((\kappa, L, s, \Gamma), V)\) and every address \(p\),</p>
+\[ s.\mathrm{ledger}\,p \;=\; \textstyle\sum_{(p', q, n) \in s.\mathrm{claims},\ p' = p}\ n. \]</div>
+<div class="env proof"><p><span class="pf">Proof.</span> Induction on \(w\). At \(\hat S_0\) both sides are 0. Deposit adds \(\nu\,\iota\) to \(\mathrm{ledger}\,p\) and appends a claim of \(p\) with amount \(\nu\,\iota\). Release and Refund subtract \(n\) from \(\mathrm{ledger}\,p\) and remove the claim. Hold, cast, vote, withdraw, balance and motion change neither side. Enact changes neither side by Theorem 4.3. <span class="qed">∎</span></p></div>
+<div class="env thm" id="cor-4-2"><p><span class="hd">Corollary 4.2</span> <span class="nm">(The proof \(h\) is derivable).</span> For each open claim \((p, q, n)\) of \(s\), \(n \le s.\mathrm{ledger}\,p\).</p></div>
+<p>So the proof \(h : n \le \mathrm{ledger}\,p\) of the on-chain settle follows from the invariant, and the protocol checks nothing at run time for it. Off-chain this matters. A runtime comparison would run on ciphertexts, and its result bit would be one more leak.</p>
+
+<h3 id="s4-5"><span class="no">4.5</span>Withdraw</h3>
+<p>Withdraw does not consult governance. For the requester \(a\) and an amount \(n \le s.\mathrm{credit}\,a\), at position \(i\):</p>
+\[ \sem{\mathrm{withdraw}\,n}_a\,(\kappa, L, s, \Gamma) \;=\; \eta'\,\big((\kappa, L,\ s\{\mathrm{credit}\,a \mathrel{-}= n\},\ \Gamma),\ [(a, n, i)]\big), \]
+<p>where \(\eta'\) is \(\some\) with a nonempty output. The debit is the partial inverse of the monoid action of \(A\) on the credit, paired with the identity on \((\kappa, L)\). \(A\) is cancellative, so \(\mathrm{credit}\,a \mathrel{-}= n\) has one value when \(n \le \mathrm{credit}\,a\). For a larger \(n\), withdraw is not defined.</p>
+<p>The protocol runs no code at \(a\). On-chain, withdraw composed the debit with the recipient run \(C^{\Gamma}_{a,n}\), which could reenter withdraw, deposit, vote and settle. Here that term is the identity, and the on-chain reentrancy analysis has no counterpart. The voucher \((a, n, i)\) is the only effect at the boundary. Its position \(i\) makes every voucher distinct. Paying each voucher once is the duty of the rail and is outside the meaning.</p>
+
+<h3 id="s4-6"><span class="no">4.6</span>Balance</h3>
+\[ \sem{\mathrm{balance}}_a\,\hat S \;=\; \eta\,(\hat S, [\,]) \quad\text{with private output } s.\mathrm{credit}\,a \text{ to } a. \]
+<p>Storage was public on-chain, so this needed no operation. Off-chain the credit is a ciphertext, and its owner needs a way to read it. Balance makes no entry.</p>
+
+<h3 id="s4-7"><span class="no">4.7</span>Motion</h3>
+<p>A member moves a constitution \(\kappa' \in \Kwf\):</p>
+\[ \sem{\mathrm{motion}\,\kappa'}\,(\kappa, L, s, \Gamma) \;=\; \eta\,\big((\kappa, L, s,\ \Gamma_A \mathrel{\app}= (\kappa', \mathrm{open}, \bot^M)),\ [\,]\big). \]
+<p>The condition \(\kappa' \in \Kwf\) includes W3, so \(L_{\kappa'}\) exists (Proposition 2.6). On-chain, the Arrow-impossibility regime froze the ledger. Here no motion can propose a constitution in that regime. The name is new because the on-chain design uses <code>propose</code> for the sequencing of configuration morphisms (section 4.9), and that meaning stays.</p>
+
+<h3 id="s4-8"><span class="no">4.8</span>Enact</h3>
+<p>The shape of the amendment rule is fixed. Its threshold \(t_A\) is part of \(\kappa\):</p>
+\[ \Amd_{t_A}(Y) = \begin{cases} \mathrm{Adopt} &amp; \tau(Y)(\mathrm{Adopt}) \ge t_A \\ \mathrm{Reject} &amp; \tau(Y)(\mathrm{Reject}) \gt n - t_A \\ \mathrm{Hold} &amp; \text{otherwise.} \end{cases} \]
+<p>The first two cases exclude each other, because together they need more than \(n\) ballots. Reject means that the current ballots leave Adopt short of \(t_A\) even if every other member votes Adopt. \(\Amd_{t_A}\) is constant on orbits, so it is an aggregation in the sense of the DAO design, with decision space \(D_A\). For an open motion \(j\), with \(M'\) the members of \(\kappa'_j\):</p>
+\[ \sem{\mathrm{enact}\,j}\,(\kappa, L, s, \Gamma) \;=\;
+\begin{cases}
+\eta\,\big((\kappa'_j,\ L_{\kappa'_j},\ s,\ \mathrm{clear}_{M'}(\Gamma)[\,j \mapsto \mathrm{closed},\ e \mapsto e + 1\,]),\ [\,]\big) &amp; \Amd_{t_A}(Y_j) = \mathrm{Adopt} \\
+\eta\,\big((\kappa, L, s,\ \Gamma[\,j \mapsto \mathrm{closed}\,]),\ [\,]\big) &amp; \Amd_{t_A}(Y_j) = \mathrm{Reject} \\
+\eta\,\big((\kappa, L, s, \Gamma),\ [\,]\big) &amp; \Amd_{t_A}(Y_j) = \mathrm{Hold.}
+\end{cases} \]
+<p>\(\mathrm{clear}_{M'}\) sets \(X_c := \bot^{M'}\) for every open claim \(c\) and \(Y_{j'} := \bot^{M'}\) for every open motion \(j'\). A ballot is part of a configuration over \(M\). When \(M' \ne M\), a configuration over \(M\) is not an object of \(\Obj_{M'}\), so the old ballots have no meaning under \(\kappa'_j\). When \(M' = M\), the design clears them anyway, so that the constitution that counts a ballot is the one under which it was cast (open item O-off-2).</p>
+<p>A pending claim is decided by the constitution in force when settle runs. The on-chain design has the same late binding: canonical amendment yields the constitution that the next settlement reads (open item O-off-1).</p>
+<div class="env thm" id="thm-4-3"><p><span class="hd">Theorem 4.3</span> <span class="nm">(Amendment does not touch the escrow).</span> On the domain of \(\mathrm{enact}\,j\), the escrow component of its result is the escrow component of its argument: \(\pi_E\) commutes with \(\sem{\mathrm{enact}\,j}\).</p></div>
+<div class="env proof"><p><span class="pf">Proof.</span> Each of the three cases keeps \(s\). <span class="qed">∎</span></p></div>
+<p>Governance moves funds only through the verdict that settle reads. No amendment can move or create a balance. An amendment changes only the rule that later settlements read.</p>
+
+<h3 id="s4-9"><span class="no">4.9</span>Amend and propose, kept</h3>
+<p><span class="runin">Amend</span> is the homomorphism already proved in the DAO design, lifted across the escrow unchanged:</p>
+\[ \sem{\mathrm{amend}} \;=\; \Gov, \qquad \mathrm{GovPhi}\,(\mathrm{canonicalAmendment}\,\act_M)\,L \;=\; \Gov\,L. \]
+<p>At a discrete decision category the canonical amendment agrees with \(F_\kappa\) at every configuration (O5). So amend changes neither \(\kappa\) nor \(L\), and the protocol represents it by no entry. Enact is the operation that changes \(\kappa\). A self-constituting constitution is a fixed point</p>
+\[ \mathrm{IsSelfConstituting}\,F \;:\equiv\; \exists L.\ \forall X.\ (\Gov\,L).\mathrm{obj}\,X = F.\mathrm{obj}\,X, \]
+<p>exactly as in <code>SelfReferentialDAO.lean</code>.</p>
+<p><span class="runin">Proposal sequencing</span> stays functoriality:</p>
+\[ \sem{\mathrm{propose}\,p \mathbin{;} q} \;=\; \sem{\mathrm{propose}\,q} \circ \sem{\mathrm{propose}\,p}, \qquad (\Gov\,L).\mathrm{map}\,(p \gg q) = (\Gov\,L).\mathrm{map}\,p \gg (\Gov\,L).\mathrm{map}\,q. \]
+<p>Over the discrete category \(\Obj_M\) it is vacuous (only identities), as on-chain.</p>
+
+<h3 id="s4-10"><span class="no">4.10</span>Consequences</h3>
+<div class="env thm" id="thm-4-4"><p><span class="hd">Theorem 4.4</span> <span class="nm">(Conservation).</span> For every valid \(w\) with \(\sem{w}\,\hat S_0 = \some((\kappa, L, s, \Gamma), V)\),</p>
+\[ \textstyle\sum_{\iota \in s.\mathrm{spent}} \nu\,\iota \;=\; \sum_{a} s.\mathrm{ledger}\,a \;+\; \sum_{a} s.\mathrm{credit}\,a \;+\; \sum_{(a, n, i) \in V} n. \]</div>
+<div class="env proof"><p><span class="pf">Proof.</span> Induction on \(w\). Deposit adds \(\nu\,\iota\) to the left side and to \(\mathrm{ledger}\,p\). Release and Refund move \(n\) from \(\mathrm{ledger}\,p\) to one credit. Withdraw moves \(n\) from \(\mathrm{credit}\,a\) into \(V\). The other operations change no term, enact by Theorem 4.3. Each sum has finite support. <span class="qed">∎</span></p></div>
+<div class="env thm" id="thm-4-5"><p><span class="hd">Theorem 4.5</span> <span class="nm">(Self-amendment stays well formed).</span> For every valid \(w\) with \(\sem{w}\,\hat S_0 = \some((\kappa, L, s, \Gamma), V)\): \(\kappa \in \Kwf\), \(L = L_\kappa\), and \(F_\kappa\) is self-constituting.</p></div>
+<div class="env proof"><p><span class="pf">Proof.</span> At genesis \(\kappa_0 \in \Kwf\) and \(L = L_{\kappa_0}\). Only enact changes \(\kappa\). It installs \(\kappa'_j\), which motion admitted only from \(\Kwf\), together with \(L_{\kappa'_j}\). Proposition 2.6 gives self-constitution. <span class="qed">∎</span></p></div>
+<p>So the constitution can change its members, both thresholds and its verdict table, and each result has exactly one legitimate aggregation. The parameters of section 2.1 are the fixed part. The constitution amends its parameters and never the meaning of an operation.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="leakage">
+<h2><span class="no">5</span>Leakage and the ideal functionality</h2>
+<div class="env def" id="def-5-1"><p><span class="hd">Definition 5.1</span> <span class="nm">(Leakage).</span> \(\ell\) assigns to each defined operation its public record, as in Table 5.1. A request that is not defined makes no entry. Its requester and the members learn that it failed, and the public does not.</p></div>
+<div class="tw">
+<table class="wide">
+<caption>Table 5.1. The leakage map \(\ell\) (default policy)</caption>
+<thead><tr><th>Operation</th><th>Public record</th><th>Private output</th><th>Hidden from the public</th></tr></thead>
+<tbody>
+<tr><td>\(\mathrm{deposit}\,p\,q\,\iota\)</td><td>\((\mathrm{deposit}, c, p, q, \iota)\)</td><td>none</td><td>nothing</td></tr>
+<tr><td>\(\mathrm{cast}\,X\)</td><td>none; no entry</td><td>the verdict, to the caller</td><td>\(X\)</td></tr>
+<tr><td>\(\mathrm{vote}\,u\,b\) by \(m\)</td><td>\((\mathrm{vote}, u, \mathrm{nf}_m(e, u))\)</td><td>none</td><td>\(m\), \(b\)</td></tr>
+<tr><td>\(\mathrm{settle}\,c\)</td><td>\((\mathrm{settle}, c, [v \ne \mathrm{Hold}])\)</td><td>none</td><td>Release or Refund; \(X_c\); \(\tau X_c\)</td></tr>
+<tr><td>\(\mathrm{withdraw}\,n\) by \(a\)</td><td>\((\mathrm{withdraw}, (a, n, i))\)</td><td>none</td><td>\(\mathrm{credit}\,a\)</td></tr>
+<tr><td>\(\mathrm{balance}\) by \(a\)</td><td>none; no entry</td><td>\(\mathrm{credit}\,a\), to \(a\)</td><td>\(\mathrm{credit}\,a\)</td></tr>
+<tr><td>\(\mathrm{motion}\,\kappa'\)</td><td>\((\mathrm{motion}, j, \kappa')\)</td><td>none</td><td>the mover</td></tr>
+<tr><td>\(\mathrm{enact}\,j\)</td><td>\((\mathrm{enact}, j, \Amd_{t_A}(Y_j))\)</td><td>none</td><td>\(\tau(Y_j)\)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Some facts follow from \(\ell\). The number of nullifiers on \(u\) is \(|\supp X_u|\), so turnout and readiness are public. By Theorem 4.1 the ledger is a function of the public claims and closed flags, so the ledger is public too. The credits are hidden, so a settlement does not show which party it paid. A later withdraw shows \((a, n)\), and the public can match amounts. That leak comes from the rail, and \(\ell\) names it.</p>
+<div class="env def" id="def-5-2"><p><span class="hd">Definition 5.2</span> <span class="nm">(Ideal functionality \(\mathcal{F}_{\sem{\cdot}}\)).</span> \(\mathcal{F}_{\sem{\cdot}}\) holds a full state \(\hat S\), initially \(\hat S_0\). On a request for \(\mathrm{op}\) from its requester: if \(\sem{\mathrm{op}}\,\hat S = \some(\hat S', V)\), it replaces \(\hat S\) by \(\hat S'\), appends \(\ell(\mathrm{op}, \hat S)\) to the public log, gives \(V\) to the rail and gives the private output to the requester. Otherwise it tells the requester and the adversary that the request failed. The adversary chooses the order of the requests and may delay any of them.</p></div>
+<div class="env def" id="req-5-3"><p><span class="hd">Requirement 5.3</span> <span class="nm">(Realization).</span> The protocol realizes \(\mathcal{F}_{\sem{\cdot}}\):</p>
+<p>(a) Correctness. After each valid entry, the meaning of the committed representation state (section 1.2) equals the state of \(\mathcal{F}_{\sem{\cdot}}\) after the same requests.<br>
+(b) Privacy. For each coalition \(C \subseteq M\) with \(C \notin \mathcal{A}_t\), a simulator can produce the view of \(C\) from the public log, the inputs of \(C\) and the private outputs to \(C\).</p></div>
+<p>Part (a) is the homomorphism condition of section 1, stated at each entry. Part (b) is the leakage rule. A representation that fails (b) has an abstraction leak, and the design rejects it.</p>
+<div class="tw">
+<table class="wide">
+<caption>Table 5.2. What each property rests on</caption>
+<thead><tr><th>Property</th><th>Holds when</th><th>Fails when</th></tr></thead>
+<tbody>
+<tr><td>Each entry agrees with its operation (5.3 a)</td><td>the proof systems are sound; FHE evaluation is public and deterministic, so anyone recomputes it</td><td>a proof system is broken. A coalition of members of any size cannot make a wrong entry.</td></tr>
+<tr><td>One history (Proposition 3.4)</td><td>W1, and at most \(f(n)\) faulty members in each epoch</td><td>more than \(f(n)\) members of one epoch sign two entries at one position</td></tr>
+<tr><td>Progress</td><td>at least \(t\) members are honest and online</td><td>fewer than \(t\) are online. The meaning is unchanged; the transcript stops.</td></tr>
+<tr><td>Privacy (5.3 b)</td><td>fewer than \(t\) members collude, and the keys rotate at each adopted enact</td><td>\(t\) members of one epoch pool their shares. They read the ballots and credits of that epoch only.</td></tr>
+<tr><td>Authorization (Definition 3.2)</td><td>the threshold signature is unforgeable</td><td>fewer than \(t\) signers cannot sign</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="regimes">
+<h2><span class="no">6</span>What the regimes mean for the escrow</h2>
+<div class="tw">
+<table class="wide">
+<thead><tr><th>Regime</th><th>Aggregation</th><th>On-chain escrow</th><th>Off-chain escrow</th></tr></thead>
+<tbody>
+<tr><td>Arrow-impossibility</td><td>empty</td><td>no legitimate settle; ledger frozen</td><td>unreachable: motion admits only \(\Kwf\), and W3 gives an aggregation (Proposition 2.6)</td></tr>
+<tr><td>Arrow-Debreu</td><td>object-unique \(L\)</td><td>unique successor at a fixed complete configuration</td><td>every reachable state; unique successor at a fixed \(X_c\) with \(\Ready_t(X_c)\)</td></tr>
+<tr><td>Schelling-Ising</td><td>two object-distinct \(L_1, L_2\)</td><td>two legitimate successors (fork of mediators)</td><td>unreachable at a discrete \(D_E\), as on-chain</td></tr>
+<tr><td>Quorum loss</td><td>unchanged</td><td>one absent member blocks every settle (O13)</td><td>fewer than \(t\) online: the transcript stops, the funds stay, the meaning is unchanged</td></tr>
+<tr><td>Equivocation</td><td>unchanged</td><td>excluded by chain consensus</td><td>more than \(f(n)\) faulty: two histories and a double spend at the rail; excluded by Proposition 3.4 while faults stay bounded</td></tr>
+</tbody>
+</table>
+</div>
+<p>The Schelling-Ising fork is a fork of mediators, each factoring through its own Lan, inside one history. The equivocation fork is a fork of the history itself. The meaning has a place for the first one only. Anonymity is inherited and now holds in the representation as well: settlement depends on the orbit of the ballots, and the protocol stores the ballots at nullifiers (Proposition 2.7).</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="rep">
+<h2><span class="no">7</span>Protocol representation sketch</h2>
+<p>The sketch uses the do-notation of the on-chain sketch. It is not executable source. Proof terms erase, as on-chain. The meaning function \(\Dec_{sk_e}\) stays inside the threshold scheme and never runs whole at one party.</p>
+
+<h3 id="s7-1"><span class="no">7.1</span>Keys of an epoch</h3>
+<ul>
+<li>\(pk_e\) and \(t\)-of-\(n\) shares of \(sk_e\): threshold FHE with programmable bootstrapping, so that the table \(\theta\) can be evaluated on an encrypted tally. A threshold variant of TFHE is one choice.</li>
+<li>\(vk_e\) and \(t\)-of-\(n\) shares of its signing key: threshold Schnorr signatures. FROST is one choice.</li>
+<li>\(\mathrm{root}_e\): the Merkle root of the commitments to the member credentials \(k_m\), \(m \in M_e\).</li>
+<li>\(\mathrm{nf}_m(e, u) = \mathrm{PRF}_{k_m}(e, u)\): the nullifier of member \(m\) on subject \(u\) in epoch \(e\).</li>
+</ul>
+<p>A distributed key generation (DKG) among \(M_0\) makes the keys of epoch 0. Each adopted enact runs a new DKG among \(M'\) (section 7.3).</p>
+
+<h3 id="s7-2"><span class="no">7.2</span>Entries</h3>
+\[ e_i = (i,\ h_{i-1},\ \mathrm{op}_i,\ \Pi_i,\ \mathrm{sig}_i), \qquad h_i = H(e_i), \qquad \mathrm{sig}_i = \mathrm{TSign}_{vk_e}\big(i,\ h_{i-1},\ \mathrm{op}_i,\ H(\mathrm{Rep}_i)\big). \]
+<p>\(\Pi_i\) holds the proofs for the secret inputs of \(\mathrm{op}_i\), and the decryption shares with their proofs. Each member runs the step, checks every guard and proof, and recomputes every public evaluation. It adds its signature share only if all checks pass. A verifier outside the committee repeats the same checks from the transcript alone. That check is the square (1.2) at entry \(i\).</p>
+
+<h3 id="s7-3"><span class="no">7.3</span>Steps</h3>
+<pre class="code"><code>-- Representation of (κ, L, s, Γ). Not the meaning.
+-- Every member runs each step, checks each guard and proof, recomputes each
+-- public evaluation, and adds its signature share only if all of them pass.
+protocol EscrowDAOOff where
+  public Rep := {
+    kappa  : (root, t, tA, θ)              -- the constitution in force; θ is public
+    epoch  : Nat                           -- e, the number of adopted enacts
+    count  : Nat                           -- the number of claim records
+    claim  : Ix -&gt; (Addr, Addr, A)         -- p, q, n in clear
+    closed : Subj -&gt; Bit                   -- claims and motions
+    ledger : Addr -&gt; A                     -- in clear: a function of claim and closed (Thm 4.1)
+    credit : Addr -&gt; Ct A                  -- under pk_e
+    spent  : Set Receipt
+    nulls  : (Nat, Subj) -&gt; Set Nullifier  -- keyed by epoch
+    ballot : (Nat, Subj, Nullifier) -&gt; Ct OneHot   -- under pk_e
+    motion : Jx -&gt; Constitution
+    head   : Digest                        -- h_i
+  }
+
+  -- ⟦deposit p q ι⟧ = monoid action on the ledger; identity on (κ, L)
+  step deposit (p q : Addr) (ι : Receipt) (ρ : RailProof) :=
+    do guard railValid ι ρ ;                    -- the rail vouches for ν ι
+       guard notIn ι spent ;
+       c &lt;- read count ;
+       write (claim c) (p, q, value ι) ;
+       write (closed c) 0 ;
+       write (ledger p) (ledger p + value ι) ;
+       write spent (insert ι spent) ;
+       write count (c + 1)
+
+  -- ⟦vote u b⟧_m = Γ[(u, m) ↦ b]; π unchanged; m never appears
+  step vote (u : Subj) (nf : Nullifier) (β : Ct OneHot) (Π : Proof) :=
+    do guard isOpen u ;
+       guard zkVerify Π (u, epoch, root, nf, β) ;
+         -- ∃ m k. commit k ∈ root ∧ nf = PRF k (epoch, u) ∧ β encrypts one ballot of B_u
+       write (nulls (epoch, u)) (insert nf (nulls (epoch, u))) ;
+       write (ballot (epoch, u, nf)) β          -- replaces an earlier ballot at the same nf
+
+  -- ⟦settle c⟧ factors through θ ∘ τ at X_c; z is the only decryption
+  step settle (c : Ix) :=
+    do guard isOpen c ;
+       guard (size (nulls (epoch, c)) &gt;= t) ;   -- Ready_t, from public data
+       (p, q, n) &lt;- read (claim c) ;
+       tl &lt;- eval (sumOver (nulls (epoch, c)) (ballot (epoch, c))) ;  -- Ct Tally, packed
+       (r, rf) &lt;- eval (lookup θ tl) ;          -- Ct Bit each: Release, Refund
+       z &lt;- tdecrypt (eval (r + rf)) ;          -- t shares, each with a proof
+       write (credit q) (eval (credit q + r * n)) ;    -- oblivious select:
+       write (credit p) (eval (credit p + rf * n)) ;   -- both credits change
+       write (ledger p) (ledger p - z * n) ;
+       write (closed c) z
+
+  -- ⟦withdraw n⟧_a = debit of credit a and one voucher; no code runs at a
+  step withdraw (a : Addr) (n : A) (σa : Sig a) :=
+    do guard sigValid a (n, head) σa ;
+       ok &lt;- tdecrypt (eval (n &lt;= credit a)) ;  -- 1 for every honest request
+       guard ok ;
+       write (credit a) (eval (credit a - n)) ;
+       emit (voucher a n i)                     -- signed with entry i
+
+  -- ⟦balance⟧_a = a private output; no entry
+  query balance (a : Addr) (pka : Key) (σa : Sig a) :=
+    keyswitch (credit a) pk_e pka               -- only a can decrypt the result
+
+  -- ⟦motion κ'⟧: κ' ∈ K_wf is a public check; θ' is a table, so W3 holds
+  step motion (κ' : Constitution) (Π : Proof) :=
+    do guard zkVerify Π (epoch, root) ;         -- the mover is a member
+       guard wellFormed κ' ;                    -- W1 and W2
+       j &lt;- fresh ;
+       write (motion j) κ' ;
+       write (closed j) 0
+
+  -- ⟦enact j⟧ = Amd_tA on Y_j; on Adopt, new keys and epoch e + 1
+  step enact (j : Jx) :=
+    do guard isOpen j ;
+       ty &lt;- eval (sumOver (nulls (epoch, j)) (ballot (epoch, j))) ;
+       (ad, rj) &lt;- tdecrypt (eval (amd tA ty)) ;   -- both bits are public under ℓ
+       match (ad, rj) with
+       | (1, 0) =&gt; do κ' &lt;- read (motion j) ;
+                      (pk', vk', root') &lt;- dkg (members κ') (t κ') ;
+                      write credit (keyswitch credit pk_e pk') ;  -- old and new committees
+                      write kappa κ' ;
+                      write epoch (epoch + 1) ;         -- old ballots stop counting
+                      write (closed j) 1 ;
+                      certify (pk', vk', root')         -- entry i signs the new keys
+       | (0, 1) =&gt; write (closed j) 1
+       | (0, 0) =&gt; pure ()
+       | (1, 1) =&gt; abort                                -- excluded: needs more than n ballots</code></pre>
+<p>The ballots are keyed by epoch, so the clear of section 4.8 costs nothing: after an adopted enact, the steps read the new epoch, and the old ballots are unreachable. The ledger is in clear because \(\ell\) already makes it public (section 5). The <code>withdraw</code> step decrypts one bit, and that bit is 1 for every honest requester, who knows its credit from <code>balance</code>.</p>
+
+<h3 id="s7-4"><span class="no">7.4</span>Where each technique sits</h3>
+<div class="tw">
+<table class="wide">
+<thead><tr><th>Meaning</th><th>FHE</th><th>ZK</th><th>Threshold MPC</th></tr></thead>
+<tbody>
+<tr><td>\(\sem{c}\) for a ciphertext \(c\)</td><td>\(\Dec_{sk_e}\)</td><td>none</td><td>\(sk_e\) shared \(t\)-of-\(n\); only a coalition in \(\mathcal{A}_t\) evaluates it</td></tr>
+<tr><td>member \(m\) in vote</td><td>none</td><td>membership in \(\mathrm{root}_e\) and \(\mathrm{nf} = \mathrm{PRF}_{k_m}(e, u)\)</td><td>none</td></tr>
+<tr><td>\(b \in B_u\)</td><td>one-hot encryption</td><td>the ciphertext encrypts one ballot</td><td>none</td></tr>
+<tr><td>\(\mathrm{verdict} = \theta(\tau X_c)\)</td><td>table lookup on the encrypted tally</td><td>none; anyone recomputes it</td><td>decryption of the closed bit \(z\), with share proofs</td></tr>
+<tr><td>case split of settle</td><td>oblivious select on \(\mathrm{credit}\,p\) and \(\mathrm{credit}\,q\)</td><td>none</td><td>none</td></tr>
+<tr><td>\(n \le \mathrm{credit}\,a\)</td><td>encrypted comparison</td><td>none</td><td>decryption of one bit</td></tr>
+<tr><td>\(S \in \mathcal{A}_t\) (Definition 3.2)</td><td>none</td><td>none</td><td>threshold signature under \(vk_e\)</td></tr>
+<tr><td>adopted enact with members \(M'\)</td><td>key switch of every credit</td><td>DKG proofs</td><td>DKG among \(M'\); rotation of \(pk\), \(vk\) and root</td></tr>
+<tr><td>balance</td><td>none</td><td>none</td><td>key switch to \(pk_a\)</td></tr>
+<tr><td>receipt \(\iota\)</td><td>none</td><td>the rail proof, if the rail gives one</td><td>none</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="nothom">
+<h2><span class="no">8</span>What is deliberately not a homomorphism</h2>
+<p>Kept from the on-chain design:</p>
+<ul>
+<li>The ledger is a commutative monoid acted on by the aggregation. It has no \(\sem{\cdot}\)-homomorphism into a monoid of aggregations. Making the treasury the DAO would collapse the dependency.</li>
+<li><code>gov_map_comp</code> carries content only for non-discrete configurations. A discrete ballot space makes proposal sequencing vacuous.</li>
+<li>Bifurcation sits in the cardinality of \(\Agg\), not in the fixed-point predicate. A genuine fork of self-constitution needs a non-constant \(F\) over a non-discrete \(D\), which this design does not supply.</li>
+<li>No naturality square for \(F \mapsto \Agg\,\act\,F\) is claimed. There is none for \(\kappa \mapsto \Agg\,\act_M\,F_\kappa\) across a change of members either: \(\Obj_M\) and \(\Obj_{M'}\) are different categories, and the design chooses no functor between them.</li>
+</ul>
+<p>Changed:</p>
+<ul>
+<li>Quorum. On-chain it was a predicate on the orbit groupoid and not yet a homomorphism. Here it is in the meaning as the readiness guard (Definition 2.3) and the authorization condition (Definition 3.2). It is still a predicate.</li>
+</ul>
+<p>New:</p>
+<ul>
+<li>Order. The sequencing members choose the order of dependent operations (Proposition 3.3). The meaning has no notion of a fair order.</li>
+<li>Censorship. A request that no coalition sequences has no meaning. Progress is a property of the representation (Table 5.2).</li>
+<li>The rail. Vouchers leave the meaning. Conservation (Theorem 4.4) holds up to the rail, and paying each voucher once is a property of the rail.</li>
+<li>Turnout. \(\ell\) shows \(|\supp X_u|\). To hide it, every member would cast a ballot on every subject. This design does not.</li>
+<li>Past epochs. The members of epoch \(e\) keep their shares of \(sk_e\) and of the signing key for \(vk_e\). Any \(t_e\) of them can read the ballots and credits of epoch \(e\) for all time, and more than \(f(n_e)\) of them can sign a second history that branches inside epoch \(e\). Erasure of old shares cannot be proved.</li>
+<li>Changes of representation. A change of FHE scheme or proof system is not an enact. It needs a proof that \(\sem{\cdot}\) is unchanged, and the meaning does not see it.</li>
+</ul>
+</section>
+
+<!-- ============================================================ -->
+<section id="open">
+<h2><span class="no">9</span>Open items</h2>
+<div class="tw">
+<table class="wide">
+<thead><tr><th>Item</th><th>Question</th><th>This draft</th></tr></thead>
+<tbody>
+<tr><td class="k">O-off-1</td><td>Is a pending claim decided by the constitution in force at settle (late binding) or at deposit (early binding)?</td><td>Late binding, as on-chain. Early binding would add the epoch to each claim.</td></tr>
+<tr><td class="k">O-off-2</td><td>Does every adopted enact clear the ballots, or only one that changes \(M\)?</td><td>Every adopted enact.</td></tr>
+<tr><td class="k">O-off-3</td><td>Should the decryption threshold exceed \(t\), so that an escrow quorum alone cannot read the ballots?</td><td>One threshold \(t\) for decryption, signatures and readiness.</td></tr>
+<tr><td class="k">O-off-4</td><td>Payee and amount privacy.</td><td>Not provided. It needs a shielded rail and oblivious writes to the credit map.</td></tr>
+<tr><td class="k">O-off-5</td><td>Deadlines as counts of entries, for example Refund after \(k\) entries without a verdict, as a field of \(\kappa\).</td><td>None.</td></tr>
+<tr><td class="k">O-off-6</td><td>Hiding turnout.</td><td>Turnout is public under \(\ell\).</td></tr>
+<tr><td class="k">O-off-7</td><td>Should \(f\) be a field of \(\kappa\) instead of \(\lfloor (n - 1)/3 \rfloor\)?</td><td>Fixed formula.</td></tr>
+<tr><td class="k">O-off-8</td><td>Should <code>balance</code> make an entry, so that reads leave an audit trail?</td><td>No entry.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section class="closing">
+<p>The design is the triple \((\kappa, L, \Eoff)\) of (2.1), the operations of section 4 and the leakage map of section 5. The protocol is correct when its transcript denotes them, entry by entry. It is private when its public view is a function of \(\ell\).</p>
+</section>
+
+</main>
+
+</body></html>

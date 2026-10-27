@@ -1,0 +1,1 @@
+def Bool : Type 0 := Flag

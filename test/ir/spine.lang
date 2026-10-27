@@ -1,0 +1,20 @@
+-- The spine lowerings. Each list or Stack here exists only at run time, so
+-- `langc ir` walks its spine. The gate compares `langc eval` results.
+def noNats : List Nat := nil
+-- The list 1, 2, ..., n.
+def upFrom : (n : Nat) -> List Nat := fun (n : Nat) => unfold (fun (k : Nat) => some (pair k (natAdd k 1))) n 1
+-- At seed 3 the step gives some(trap), so the list gets a trap tail.
+def upTrap : (n : Nat) -> List Nat := fun (n : Nat) => unfold (fun (k : Nat) => flagIf (natEq k 3) (some (fold (fun (p : Prod Nat Nat) => p) (pair 0 0) (natAdd 18446744073709551615 1))) (some (pair k (natAdd k 1)))) n 1
+def foldOnes : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 (fold (fun (acc : List Nat) => cons 2 acc) noNats n)
+def mapUp : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 (map (fun (x : Nat) => natMul x 3) (upFrom n))
+def bindUp : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 (bind (upFrom n) (fun (x : Nat) => cons x (cons 10 noNats)))
+def filterUp : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 (filter (fun (x : Nat) => natLe x 2) (upFrom n))
+def trapHead : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => x) 0 (upTrap n)
+def trapSum : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 (upTrap n)
+-- The test of item 3 traps.
+def filterTrap : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 (filter (fun (x : Nat) => flagIf (natEq x 3) (natEq (natAdd 18446744073709551615 1) 0) (natLe x 5)) (upFrom n))
+-- The result of F for item 2 has a trap tail.
+def bindTrap : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (x : Nat) (acc : Nat) => x) 0 (bind (upFrom n) (fun (x : Nat) => flagIf (natEq x 2) (fold (fun (o : List Nat) => o) noNats (natAdd 18446744073709551615 1)) (cons x noNats)))
+def stackSum : (n : Nat) -> Nat := fun (n : Nat) => fold 0 (fun (top : Nat) (acc : Nat) => natAdd top acc) (fold (fun (s : Stack) => push 5 s) bottom n)
+-- The last push has a trapped rest.
+def stackTrap : (n : Nat) -> Nat := fun (n : Nat) => fold 0 (fun (top : Nat) (acc : Nat) => top) (fold (fun (s : Stack) => push 5 s) (push 7 (fold (fun (s : Stack) => s) bottom (natAdd 18446744073709551615 1))) n)

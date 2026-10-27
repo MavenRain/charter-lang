@@ -1,0 +1,1 @@
+def wrong : Nat := first (pair none 1)

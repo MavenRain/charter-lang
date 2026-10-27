@@ -1,0 +1,21 @@
+-- Sample domain. Replace it with your design. See domain/README.md.
+-- Each family, constructor, field and def name here becomes a core name
+-- (rule R4). Only this file can declare a family (rule R1).
+family Color := red | green | blue
+family Item := makeItem (itemColor : Color) (itemPrice : Nat) (itemCount : Nat)
+family Stack := bottom | push (top : Nat) (rest : Stack)
+-- A tree: a fold over a tree that exists at run time is a HOST-LIMIT.
+family Tree := tip | fork (forkLeft : Tree) (forkRight : Tree)
+-- An indexed family (former F15): `Lot 3` is a lot of size 3.
+family Lot (size : Nat) := makeLot (lotPrice : Nat)
+
+def lineTotal : (item : Item) -> Nat :=
+  fun (item : Item) => natMul (itemPrice item) (itemCount item)
+def isRed : (color : Color) -> Flag :=
+  fun (color : Color) => fold flagYes flagNo flagNo color
+def total : (items : List Item) -> Nat :=
+  fun (items : List Item) => fold (fun (item : Item) (acc : Nat) => natAdd (lineTotal item) acc) 0 items
+def redTotal : (items : List Item) -> Nat :=
+  fun (items : List Item) => total (filter (fun (item : Item) => isRed (itemColor item)) items)
+def depth : (s : Stack) -> Nat :=
+  fun (s : Stack) => fold 0 (fun (top : Nat) (rest : Nat) => natAdd rest 1) s

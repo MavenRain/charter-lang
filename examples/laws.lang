@@ -1,0 +1,16 @@
+-- Laws that the checker proves by normalization: each proof is refl.
+def xs : List Nat := cons 1 (cons 2 nil)
+def noNats : List Nat := nil
+def leftFour : Sum Nat Nat := inl 4
+def beta : Eq Nat ((fun (n : Nat) => natMul n n) 6) 36 := refl
+def eta : Eq ((n : Nat) -> Nat) (fun (n : Nat) => natAdd n 1) (fun (m : Nat) => natAdd m 1) := refl
+def mapId : Eq (List Nat) (map (fun (n : Nat) => n) xs) xs := refl
+def leftUnit : Eq (Option Nat) (bind (pure 4) (fun (n : Nat) => some (natAdd n 1))) (some 5) := refl
+def rightUnit : Eq (Option Nat) (bind (some 4) (fun (n : Nat) => pure n)) (some 4) := refl
+def foldNil : Eq Nat (fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 noNats) 0 := refl
+def foldSum : Eq Nat (fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 xs) 3 := refl
+def firstPair : Eq Nat (first (pair 3 flagYes)) 3 := refl
+def eitherLeft : Eq Nat (either (fun (n : Nat) => n) (fun (n : Nat) => natAdd n 1) leftFour) 4 := refl
+def subFloor : Eq Nat (natSub 3 5) 0 := refl
+def flagTrue : Eq Nat (flagIf (natLe 2 3) 1 0) 1 := refl
+def lotLaw : Eq Nat (lotPrice (makeLot 3 250)) 250 := refl

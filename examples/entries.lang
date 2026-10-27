@@ -1,0 +1,13 @@
+-- Entries: first-order Nat and Flag definitions. The target exports them.
+def addPrice : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => natAdd a b
+def scale : (a k : Nat) -> Nat := fun (a k : Nat) => natMul a k
+def discount : (a d : Nat) -> Nat := fun (a d : Nat) => natSub a d
+def cheap : (a : Nat) -> Flag := fun (a : Nat) => natLe a 100
+def square : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (acc : Nat) => natAdd acc n) 0 n
+def pick : (f : Flag) -> (a b : Nat) -> Nat := fun (f : Flag) (a b : Nat) => flagIf f a b
+-- Shared values: the lowering shares a value in a block. shareArms uses one value
+-- in the two arms of flagIf. shareDeep doubles the value 16 times.
+def dbl : (t : Nat) -> Nat := fun (t : Nat) => natAdd t t
+def shareTwice : (u : Nat) -> Nat := fun (u : Nat) => (fun (t : Nat) => natAdd t t) (natMul u u)
+def shareArms : (u v : Nat) -> Nat := fun (u v : Nat) => (fun (t : Nat) => flagIf (natEq u 0) t (natAdd t 1)) (natMul v v)
+def shareDeep : (u : Nat) -> Nat := fun (u : Nat) => dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl (dbl u)))))))))))))))

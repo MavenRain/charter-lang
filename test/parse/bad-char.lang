@@ -1,0 +1,1 @@
+def x : Nat := natAdd 1 + 2

@@ -1,0 +1,1 @@
+def wrong : Sum Flag Nat := filter (fun (n : Nat) => natLe n 3) (inr 3)

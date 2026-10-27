@@ -1,0 +1,8 @@
+-- Formers F6 and F7: fold over Nat, List and a domain family; unfold with a step limit.
+def sumList : (xs : List Nat) -> Nat :=
+  fun (xs : List Nat) => fold (fun (x : Nat) (acc : Nat) => natAdd x acc) 0 xs
+def square : (n : Nat) -> Nat := fun (n : Nat) => fold (fun (acc : Nat) => natAdd acc n) 0 n
+def ones : (n : Nat) -> List Nat := fun (n : Nat) => fold (fun (acc : List Nat) => cons 1 acc) nil n
+def colorCode : (c : Color) -> Nat := fun (c : Color) => fold 1 2 3 c
+def down : List Nat := unfold (fun (n : Nat) => some (pair n (natSub n 1))) 3 5
+def stop : List Nat := unfold (fun (n : Nat) => none) 3 5

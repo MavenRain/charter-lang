@@ -1,0 +1,2 @@
+def twin : Nat := 1
+def twin : Nat := 2

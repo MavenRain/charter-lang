@@ -1,0 +1,47 @@
+# charter-lang
+
+charter-lang is a language for an escrow that a member set governs off
+chain. A program states the meaning of the Off-Chain EscrowDAO note:
+deposits, encrypted votes, settlement by a threshold of members,
+withdrawals as vouchers, and a constitution that amends itself. The host
+is TinyCC. The planned targets are Wasm (client, member node and public
+verifier), a ZK circuit IR and an FHE circuit IR.
+
+## Status (S0)
+
+S0 is the seed. The tcc-wasm kit pipeline of lang-template works: parse,
+check, IR, Wasm and the differential test, on the kit sample domain. The
+design and the plan are written. There is no charter-lang domain code
+yet. `make check` passes. `docs/PLAN.md` section 9 gives the slices.
+
+## When to reach for charter-lang
+
+| Task | charter-lang? |
+|---|---|
+| state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes, PLANNED (S2) |
+| run the clear meaning of a transcript in Wasm | yes, PLANNED (S3) |
+| tally encrypted ballots and update encrypted credits under threshold TFHE | yes, PLANNED (S5, S6) |
+| prove membership and ballot well-formedness in a circuit | yes, PLANNED (S7) |
+| verify a transcript as a member node or as a public verifier | yes, PLANNED (S8) |
+| an on-chain escrow on EVM | no: use escrow-lang |
+| general-purpose code, strings, clocks, payment on a rail | no: excluded (`docs/PLAN.md` 3.3) |
+
+## Files
+
+- `design/DESIGN.md`: the USER ask, the rulings and the S0 facts.
+- `design/OFFCHAIN-ESCROWDAO.html`: the design note, the only domain
+  source.
+- `docs/PLAN.md`: rulings, the R1 reading, the base signature, the crypto
+  layer, targets, laws, agent adoption, slices and questions.
+- `AGENTS.md`: how an agent uses this repository.
+- `SPEC.md`, `formers/`, `probe/`, `docs/STATUS.md`, `docs/VALIDATION.md`,
+  `docs/host/README.md`: the kit files. The slices fill them.
+
+## Build
+
+`make check` builds `build/langc` with tcc and runs the gate. The gate
+needs node, wasm-validate and wasm-objdump.
+
+## License
+
+MIT OR Apache-2.0.

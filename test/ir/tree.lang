@@ -1,0 +1,3 @@
+-- The check accepts this program, but the fold walks a tree that exists
+-- only at run time. `langc ir` must refuse it with REFUSE_RUNTIME_TREE.
+def tips : (n : Nat) -> Nat := fun (n : Nat) => fold 1 (fun (a : Nat) (b : Nat) => natAdd a b) (fold (fun (t : Tree) => fork t t) tip n)
