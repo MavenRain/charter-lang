@@ -38,7 +38,7 @@ and `filter` (PLAN 2.3 for `List`; leaf-lang S1 for `unfold` and `filter`). Thei
 core paths, for example `src/front/lower.c:869`,
 `src/front/lower.c:921` and `src/front/lower.c:971`.
 
-F6: a fold over a data type with one recursive field (for example `Stack`)
+F6: a fold over a data type with one recursive field (for example `FreeMon ℕ`)
 lowers to a loop over the spine. A constructor with two or more recursive
 fields (for example `Tree`) needs a tree at run time. The lowering refuses
 it with `REFUSE_RUNTIME_TREE` when the tree exists only at run time.

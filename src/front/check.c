@@ -61,6 +61,7 @@ typedef enum {
   RULE_BIND,
   RULE_FILTER,
   RULE_FOLD,
+  RULE_IND,
   RULE_UNFOLD,
   RULE_SYMM,
   RULE_TRANS,
@@ -72,7 +73,7 @@ typedef enum {
 
 typedef struct {
   const char *name;
-  uint32_t arity; /* fold: the least number of arguments */
+  uint32_t arity; /* fold, ind: the least number of arguments */
   Rule rule;
   Op op;
   Op result;     /* VALUE0, NAT2: the result type. EMPTY, INJ: the type former. */
@@ -103,6 +104,7 @@ static const Builtin BUILTINS[] = {
   {"map", 2, RULE_MAP, OP_MAP, OP_NAT, 0},
   {"bind", 2, RULE_BIND, OP_BIND, OP_NAT, 0},
   {"fold", 2, RULE_FOLD, OP_FOLD_NAT, OP_NAT, 0},
+  {"ind", 2, RULE_IND, OP_IND_NAT, OP_NAT, 0},
   {"symm", 1, RULE_SYMM, OP_SYMM, OP_EQ, 0},
   {"trans", 2, RULE_TRANS, OP_TRANS, OP_EQ, 0},
   {"cong", 2, RULE_CONG, OP_CONG, OP_EQ, 0},
@@ -759,6 +761,143 @@ static const Core *rule_fold(Call *k) {
   return s == NULL ? NULL : nul(FAIL(c, "TYPE_MISMATCH", "fold needs a last argument of type Nat or a domain data type, and one case for each constructor; found %u arguments and a last argument of type %s", k->argc, show(c, st)));
 }
 
+/* The motive P of ind: a function from DOM (Nat or a domain family type,
+   NAME in a diagnostic) into a universe. A bare binder takes the type DOM. */
+static const Core *ind_motive(Checker *c, const Term *t, const Value *dom, const char *name) {
+  const Value *pt = NULL;
+  const Value *cod;
+  const Core *p;
+  if (t->kind == TERM_LAM && t->left == NULL) {
+    uint64_t level = 0;
+    const Core *body;
+    if (!push(c, t->name, dom))
+      return NULL;
+    body = check_type(c, t->right, &level);
+    pop(c);
+    return body == NULL ? NULL : core_bind(c, CORE_LAM, t->name, NULL, body);
+  }
+  p = infer(c, t, &pt);
+  cod = p != NULL && pt != NULL && pt->kind == VAL_PI ? closure_apply(c->m, pt, val_var(c->m, c->level)) : NULL;
+  if (p != NULL && (cod == NULL || cod->kind != VAL_UNIV || !conv_values(c->m, c->level, pt->dom, dom)))
+    return nul(FAIL(c, "TYPE_MISMATCH", "ind needs a motive P : %s -> Type l, found a term of type %s", name, show(c, pt)));
+  return p;
+}
+
+/* (k : Nat) -> P k -> P (natAdd k 1), with PV the value of the motive P.
+   Port of quorum-lang 09f7f59 elim_step. */
+static const Value *ind_step(Checker *c, const Value *pv) {
+  const Core *succ = op3(c, OP_NAT_ADD, 0, 2, core_index(c, CORE_VAR, 1u), core_leaf(c, CORE_NAT, 1u), NULL);
+  const Core *ih = core_app(c, core_index(c, CORE_VAR, 1u), core_index(c, CORE_VAR, 0u));
+  const Core *res = succ == NULL ? NULL : core_app(c, core_index(c, CORE_VAR, 2u), succ);
+  const Core *body = ih == NULL || res == NULL ? NULL : core_bind(c, CORE_PI, "ih", ih, res);
+  const Env *env = body == NULL ? NULL : env_push(c->m, NULL, pv);
+  return env == NULL ? NULL : val_closure(c->m, VAL_PI, "k", nat_type(c), env, body);
+}
+
+/* The type of the ind case of the constructor INST at the parameters of
+   ST (S2a item 4): a Pi over each field and, after each recursive field f,
+   the hypothesis `ih : P f`, around P (ctor p1 .. pn fields), with PV the
+   motive P. A field type is in the context of the parameters only. Port
+   of intent-lang S7 B1 case_fields (no indices and no path fields here). */
+static const Value *ind_case(Checker *c, uint32_t inst, const Value *st, const Value *pv) {
+  Machine *m = c->m;
+  const CtorInfo *ctor = &m->ctors[inst];
+  uint32_t p = m->families[ctor->family].param_count;
+  uint32_t n = ctor->field_count;
+  const Env *env = env_of(c, st->args, p);
+  const Core **types = arena_alloc(m->arena, ((size_t)n + 1u) * sizeof *types);
+  const Core **ihs = arena_alloc(m->arena, ((size_t)n + 1u) * sizeof *ihs);
+  const Value **a = arena_alloc(m->arena, ((size_t)p + n + 1u) * sizeof *a);
+  const Core *t;
+  uint32_t at = c->level;
+  uint32_t i;
+  if (types == NULL || ihs == NULL || a == NULL)
+    return here(c, nul(FAIL(c, "OOM", "out of memory")));
+  for (i = 0; i < p; i++)
+    a[i] = st->args[i];
+  for (i = 0; i < n; i++) {
+    const FieldInfo *field = &ctor->fields[i];
+    a[p + i] = val_var(m, at);
+    types[i] = quote_value(m, at, eval_core(m, env, field->type));
+    ihs[i] = field->recursive ? quote_value(m, at + 1u, apply_value(m, pv, a[p + i])) : NULL;
+    if (types[i] == NULL || (field->recursive && ihs[i] == NULL))
+      return NULL;
+    at += field->recursive ? 2u : 1u;
+  }
+  t = quote_value(m, at, apply_value(m, pv, val_op(m, VAL_OP, OP_CTOR, inst, 0, a, p + n)));
+  for (i = n; i > 0u && t != NULL; i--) {
+    t = ihs[i - 1u] == NULL ? t : core_bind(c, CORE_PI, "ih", ihs[i - 1u], t);
+    t = t == NULL ? NULL : core_bind(c, CORE_PI, ctor->fields[i - 1u].name, types[i - 1u], t);
+  }
+  return here(c, t);
+}
+
+/* ind P c1 .. cn x over a domain family (S2a item 4), with
+   P : F p1 .. pn -> Type l and one case for each constructor (ind_case).
+   The type is P x. */
+static const Core *ind_family(Call *k, const Core *s, const Value *st) {
+  Checker *c = k->c;
+  Machine *m = c->m;
+  const FamilyInfo *f = &m->families[st->inst];
+  const Core *p = ind_motive(c, k->args[0], st, f->name);
+  const Value *pv = here(c, p);
+  const Core **cores = arena_alloc(m->arena, ((size_t)f->ctor_count + 2u) * sizeof *cores);
+  uint32_t j;
+  if (cores == NULL)
+    return nul(FAIL(c, "OOM", "out of memory"));
+  if (pv == NULL)
+    return NULL;
+  cores[0] = p;
+  for (j = 0; j < f->ctor_count; j++) {
+    const Value *ct = ind_case(c, f->first_ctor + j, st, pv);
+    cores[j + 1u] = ct == NULL ? NULL : check(c, k->args[j + 1u], ct);
+    if (cores[j + 1u] == NULL)
+      return NULL;
+  }
+  cores[f->ctor_count + 1u] = s;
+  k->used = f->ctor_count + 2u;
+  k->type = apply_value(m, pv, here(c, s));
+  return core_op(c, OP_IND_FAMILY, st->inst, 0, cores, f->ctor_count + 2u);
+}
+
+/* ind P z s n (S2a, O8): the dependent eliminator of Nat, with
+   P : Nat -> Type l, z : P 0 and s : (k : Nat) -> P k -> P (natAdd k 1).
+   The type is P n. Port of quorum-lang 09f7f59 rule_elim (its Nat case). */
+static const Core *ind_nat(Call *k) {
+  Checker *c = k->c;
+  Machine *m = c->m;
+  const Core *p = ind_motive(c, k->args[0], nat_type(c), "Nat");
+  const Value *pv = p == NULL ? NULL : here(c, p);
+  const Core *z = pv == NULL ? NULL : check(c, k->args[1], apply_value(m, pv, val_nat(m, 0u)));
+  const Core *s = z == NULL ? NULL : check(c, k->args[2], ind_step(c, pv));
+  const Core *x = s == NULL ? NULL : check(c, k->args[3], nat_type(c));
+  const Core *cores[4] = {p, z, s, x};
+  if (x == NULL)
+    return NULL;
+  k->used = 4u;
+  k->type = apply_value(m, pv, here(c, x));
+  return core_op(c, OP_IND_NAT, 0, 0, cores, 4u);
+}
+
+/* The family scrutinee sets the arity. Any arguments after it apply to
+   the result of ind, just as they do for the Nat form. */
+static const Core *rule_ind(Call *k) {
+  Checker *c = k->c;
+  const Value *st = NULL;
+  const Value *pt = NULL;
+  const Core *p = try_infer(c, k->args[0], &pt);
+  uint32_t i;
+  for (i = 1u; i < k->argc; i++) {
+    const Core *s = try_infer(c, k->args[i], &st);
+    if (s != NULL && val_is(st, OP_FAMILY) && c->m->families[st->inst].ctor_count + 2u == i + 1u &&
+        (p == NULL || pt == NULL || pt->kind != VAL_PI || conv_values(c->m, c->level, pt->dom, st)))
+      return ind_family(k, s, st);
+  }
+  if (k->argc < 4u)
+    return nul(FAIL(c, "TYPE_ARITY", "ind needs a motive, one case for each constructor and a last argument of type Nat or a domain data type; found %u arguments", k->argc));
+  return ind_nat(k);
+}
+
 /* unfold g limit seed, with g : S -> Option (Prod A S). */
 static const Core *rule_unfold(Call *k) {
   Checker *c = k->c;
@@ -902,6 +1041,8 @@ static const Core *rule(Call *k) {
     return rule_filter(k);
   case RULE_FOLD:
     return rule_fold(k);
+  case RULE_IND:
+    return rule_ind(k);
   case RULE_UNFOLD:
     return rule_unfold(k);
   case RULE_SYMM:
@@ -1039,9 +1180,9 @@ static const Dropped DROPPED[] = {
   {"pair", "pack", "use pack (a term of A × B is pack a b)"},
   {"first", "witness", "use witness"},
   {"second", "payload", "use payload"},
-  {"List", NULL, "no cons list (rule R1); FreeMon of domain/domain.lang comes at S2"},
-  {"nil", NULL, "no cons list (rule R1); FreeMon of domain/domain.lang comes at S2"},
-  {"cons", NULL, "no cons list (rule R1); FreeMon of domain/domain.lang comes at S2"},
+  {"List", NULL, "use FreeMon A of domain/domain.lang: fmNil A, fmCons A h t"},
+  {"nil", NULL, "use FreeMon A of domain/domain.lang: fmNil A, fmCons A h t"},
+  {"cons", NULL, "use FreeMon A of domain/domain.lang: fmNil A, fmCons A h t"},
   {"filter", NULL, "no core name replaces it"},
   {"unfold", NULL, "no core name replaces it before S2"}
 };
@@ -1351,15 +1492,29 @@ static int name_free(Checker *c, const char *name) {
   return why == NULL ? 1 : FAIL(c, "REFUSE_NAME", "%s is %s (rule R4)", name, why);
 }
 
-/* A recursive field must be the whole field type, in a family with no
-   parameters. */
+/* A recursive field must be the whole field type: the family FAM with its
+   own parameters, in their order (uniform recursion, O9). The parameters
+   are the innermost binders of a field type. */
+static int uniform_self(const Machine *m, uint32_t fam, const Core *t) {
+  uint32_t p = m->families[fam].param_count;
+  uint32_t i;
+  if (t->kind != CORE_OP || t->op != OP_FAMILY || t->inst != fam || t->argc != p)
+    return 0;
+  for (i = 0; i < p; i++)
+    if (t->args[i]->kind != CORE_VAR || t->args[i]->index != p - 1u - i)
+      return 0;
+  return 1;
+}
+
 /* Rule R1 (PLAN 2.1): a family with a type parameter is a cell monad.
    Ported from intent-lang 67445ae and resolve-lang 632d819 (cell_header,
    cell_field, cell_generators) without paths, type indices and and
    blocks, which the kit does not have. Each parameter is a universe, each
    type parameter is the one field of exactly one generator constructor,
-   and every other field is closed data. A recursive field gets
-   DOMAIN_FAMILY first (a kit HOST-LIMIT). */
+   and every other field is closed data or a uniform recursive field (an
+   operation of the cell takes a cell, as `emit` of Q5). The second class
+   is a free monoid (Q-S2a-2): one type parameter, a constructor without
+   fields and a cons constructor. The kit derives no pure, map or bind. */
 static int cell_type_argument(const Core *t) {
   while (t->kind == CORE_PI)
     t = t->b;
@@ -1407,18 +1562,36 @@ static int cell_closed(const Core *t, uint32_t depth) {
   return 1;
 }
 
-static int cell_field(Checker *c, const FamilyInfo *f, const FieldInfo *out, size_t field_count) {
-  if (cell_param(f, out->type) < f->param_count)
-    return field_count == 1u ? 1 : FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the field %s has a type parameter as its type, so it must be the one field of its constructor (rule R1)", f->name, out->name);
-  if (cell_closed(out->type, 0u))
-    return 1;
-  return FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the field %s must be a type parameter or closed data (rule R1)", f->name, out->name);
+/* A cons constructor of a free monoid: the field of the one type parameter,
+   then a uniform recursive field. */
+static int cell_cons(const FamilyInfo *f, const FieldInfo *fields, size_t field_count) {
+  return f->param_count == 1u && field_count == 2u && cell_param(f, fields[0].type) == 0u && fields[1].recursive;
 }
 
-/* Each type parameter has exactly one generator. */
+static int cell_field(Checker *c, const FamilyInfo *f, const FieldInfo *out, size_t field_count, int cons) {
+  if (out->recursive)
+    return 1;
+  if (cell_param(f, out->type) < f->param_count)
+    return field_count == 1u || cons ? 1 : FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the field %s has a type parameter as its type, so it must be the one field of its constructor (rule R1)", f->name, out->name);
+  if (cell_closed(out->type, 0u))
+    return 1;
+  return FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the field %s must be a type parameter, closed data or a uniform recursive field (rule R1)", f->name, out->name);
+}
+
+/* Each type parameter has exactly one generator. A family with a cons
+   constructor is a free monoid: it has exactly one other constructor, and
+   that constructor has no fields. */
 static int cell_generators(Checker *c, const Decl *d, const FamilyInfo *f) {
   const Machine *m = c->m;
   uint32_t k, i;
+  uint32_t cons = 0, empty = 0;
+  for (i = 0; i < f->ctor_count; i++) {
+    const CtorInfo *ci = &m->ctors[f->first_ctor + i];
+    cons += (uint32_t)cell_cons(f, ci->fields, ci->field_count);
+    empty += ci->field_count == 0u;
+  }
+  if (cons > 0u)
+    return f->ctor_count == 2u && cons == 1u && empty == 1u ? 1 : FAIL(c, "REFUSE_CELL", "%s is not a cell signature: a free monoid has one cons constructor and one constructor without fields (rule R1)", f->name);
   for (k = 0; k < f->param_count; k++) {
     uint32_t gens = 0;
     for (i = 0; i < f->ctor_count; i++)
@@ -1443,12 +1616,12 @@ static int check_field(Checker *c, uint32_t fam, const Field *field, FieldInfo *
     return 0;
   if (level > c->m->families[fam].universe)
     c->m->families[fam].universe = level;
-  whole = t->kind == CORE_OP && t->op == OP_FAMILY && t->inst == fam && c->m->families[fam].param_count == 0u;
+  whole = uniform_self(c->m, fam, t);
   out->name = field->name;
   out->type = t;
   out->recursive = c->self_uses > 0u;
   if (out->recursive && !whole)
-    return FAIL(c, "DOMAIN_FAMILY", "the recursive field %s must have the type %s itself, in a family with no parameters", field->name, c->m->families[fam].name);
+    return FAIL(c, "DOMAIN_FAMILY", "the recursive field %s must have the type %s with its own parameters in their order (uniform recursion)", field->name, c->m->families[fam].name);
   return 1;
 }
 
@@ -1473,10 +1646,14 @@ static int check_ctor(Checker *c, uint32_t fam, const Ctor *ctor) {
       return 0;
     if (has_type_param(&m->families[fam])) {
       fields[j].type = quote_value(m, c->level, here(c, fields[j].type));
-      if (fields[j].type == NULL || !cell_field(c, &m->families[fam], &fields[j], ctor->field_count))
+      if (fields[j].type == NULL)
         return 0;
     }
   }
+  /* R1 sees all the fields, so a cons constructor is known before its head. */
+  for (j = 0; has_type_param(&m->families[fam]) && j < ctor->field_count; j++)
+    if (!cell_field(c, &m->families[fam], &fields[j], ctor->field_count, cell_cons(&m->families[fam], fields, ctor->field_count)))
+      return 0;
   ci->name = ctor->name;
   ci->family = fam;
   ci->fields = fields;
@@ -1662,6 +1839,7 @@ int eval_command(Machine *m, const char *name, char *const *args, int arg_count,
   const Value *v;
   char *buf;
   uint32_t i;
+  runtime_begin(m);
   m->def = name;
   if (d == NO_DEF) {
     diag_fail(m->diag, "EVAL_ENTRY", name, "no definition has this name");

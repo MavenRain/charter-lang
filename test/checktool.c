@@ -56,6 +56,27 @@ static int warning_fix(const char *text) {
   return ok;
 }
 
+/* A constant induction step must not erase overflow in a symbolic successor. */
+static int runtime_ind_effect(void) {
+  static const char text[] =
+    "guarded : (n : ℕ) → ℕ\n"
+    "guarded n = ind (λ (m : ℕ) → ℕ) 7 (λ (k : ℕ) (ih : ℕ) → 7) (natAdd n 1)\n";
+  Arena arena;
+  Diag diag;
+  Front front;
+  Machine machine;
+  IrProgram prog;
+  arena_init(&arena, (size_t)1 << 24);
+  diag_init(&diag);
+  int checked = front_load(&arena, "test-ind-effect", text, strlen(text), &front, &diag)
+    && check_program(&arena, &front.decls, &machine, &diag);
+  int ok = checked && !lower_program(&machine, &prog) && diag.code != NULL
+    && strcmp(diag.code, "REFUSE_RUNTIME_TREE") == 0;
+  if (!ok) fprintf(stderr, "FAIL runtime ind: symbolic successor lost its overflow effect\n");
+  arena_release(&arena);
+  return ok;
+}
+
 int main(void) {
   int ok = 1;
   ok &= warning_fix("-- keep this comment\nid : Nat -> Nat\nid x = x\n");
@@ -64,6 +85,7 @@ int main(void) {
   ok &= warning_fix("value : ℕ\nvalue = 1\n\n-- tail   ");
   ok &= warning_fix("value : ℕ\nvalue = 1 -- inline\n");
   ok &= warning_fix(" \n\t");
+  ok &= runtime_ind_effect();
   if (ok) puts("warning fix regressions: passed");
   return ok ? 0 : 1;
 }

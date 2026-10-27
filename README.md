@@ -7,24 +7,30 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S1)
+## Status (S2a)
 
-S1 is built. The front end has the leaf-lang surface. `langc fmt` prints
-the one canonical form, and `langc check --json` gives a JSON diagnostic
-with a fix hint and the counts parsed and typed (the law count comes at
-S2). Rule R1 is enforced: a domain family is a cell signature or it gets
-`REFUSE_CELL`, and a program cannot declare data (`REFUSE_DATA`).
+S1 and S2a are built. The front end has the leaf-lang surface. `langc fmt`
+prints the one canonical form, and `langc check --json` gives a JSON
+diagnostic with a fix hint and the counts parsed, typed and laws (the law
+definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
+family is a cell signature or a free monoid, or it gets `REFUSE_CELL`, and
+a program cannot declare data (`REFUSE_DATA`). The checker has the
+dependent eliminator `ind` for `ℕ` and for each domain family, and a
+recursive field with the uniform parameters of its family (`SPEC.md` 2.7).
 `domain/domain.lang` has the base data: the enums `DecE`, `BallotA`,
-`DecA` and `Bit`, `Address`, the asset structure `CMon` and the records
-`Voucher M` and `Claim M`. The kit `Stack` and `Tree` stay as regression
-subjects until S2. The escrow operations, the laws and all crypto are
-not built. `make check` passes. `docs/PLAN.md` section 9 gives the slices.
+`DecA` and `Bit`, `Address`, the asset structure `CMon`, the records
+`Voucher M` and `Claim M`, and `FreeMon A` with its monoid laws.
+`FreeMon A` replaces the kit `Stack`; the kit `Tree` stays as a regression
+subject. `examples/assets.lang` has `natCMon`, the `ℕ` instance of `CMon`,
+with its seven laws. The escrow operations, the other laws and all crypto
+are not built. `make check` passes. `docs/PLAN.md` section 9 gives the
+slices.
 
 ## When to reach for charter-lang
 
 | Task | charter-lang? |
 |---|---|
-| state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes, PLANNED (S2) |
+| state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes, PLANNED (S2b) |
 | run the clear meaning of a transcript in Wasm | yes, PLANNED (S3) |
 | tally encrypted ballots and update encrypted credits under threshold TFHE | yes, PLANNED (S5, S6) |
 | prove membership and ballot well-formedness in a circuit | yes, PLANNED (S7) |

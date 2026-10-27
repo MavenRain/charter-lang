@@ -55,7 +55,7 @@ a former: a system is legal only as the side of `hcomp` (quorum-lang 2.2).
 | `Path`, `I`, `transp`, `hcomp`, `U`, `Glue`, `ua` | the law statements in section 6 | ambient |
 | `Option` | `X + {bot}`, `D_E + {bot}` (L158, L226, L234) | CM: `some` is the generator, `none` takes no argument |
 | `T` (partial writer) | `T Z = 1 + Z x List Voucher` (L285, L286) | one CM in `domain/domain.lang` (Q5) |
-| `FreeMon` (List) | `List Claim`, `List Voucher`, `Op*` (L256, L285, L287) | CM in generator form: `eta` singleton, `nil`, `app`, unit and associativity paths, set truncation. A cons `List` is REFUSED (leaf precedent) |
+| `FreeMon` (List) | `List Claim`, `List Voucher`, `Op*` (L256, L285, L287) | rule R1 second class (Q-S2a-2 (a)), cons form in `domain/domain.lang`: `fmNil`, `fmCons`; `fmAppend` by `fold`; the unit and associativity laws are `Eq` proofs by `refl` and `ind` (S2a) |
 | `FinSet` | `Fin Receipt`, `Set Nullifier`, coalitions `S` (L237, L256, L519) | CM in generator form (finite multiset shape with an idempotence path), or a sorted map in the meaning (S2 picks one; both are CM or base) |
 | `Trunc` | the meaning of `Proof` and `Sig_e m` (L209, L210) | CM with one 1-cell `squash` |
 | `Tally` | the orbit `X // Sym(M)` (L236, L251) | base type, no HIT (Q7) |
@@ -146,7 +146,9 @@ One line per operation: the primitive ops it needs (L298, L332 to L341).
 
 charter-lang does not admit: floats or reals (L227, L229); strings (no note
 line uses one); clocks and timestamps (L276); general recursion and loops
-beyond the fold over `Op*` and finite sums (L287, L422); coinductive
+beyond the fold over `Op*`, finite sums (L287, L422) and the proof former
+`ind` (S2a); `rec` and postulates in each file, the domain file too
+(`REFUSE_REC`, `REFUSE_AXIOM`; SPEC 2.1); coinductive
 streams; mutable global state and exceptions (partiality is `Option` in
 `T`, L285); a comparison on ciphertexts for the settle guard (L376);
 code that runs at a recipient (L382); non-discrete decision categories
@@ -243,7 +245,10 @@ members (L635), no payee or amount privacy (L650).
 ## 6. Laws
 
 The progress count "laws discharged" in `langc check --json` counts the
-rows of this table that a program uses.
+law definitions of a program as `"laws":"k of m"` (S2a): `m` is the number
+of definitions whose type is `Eq ..` under zero or more Pi binders, and `k`
+is the number of them that type-check. A postulate is not a law. S2b states
+the rows of this table as law definitions.
 
 | Law | Statement | Cite | Slice |
 |---|---|---|---|
@@ -300,7 +305,8 @@ EXIT 0 (serial log with `echo "EXIT $?"`).
 |---|---|---|
 | S0 | seed from the `tcc-wasm` kit; DESIGN, PLAN, README, AGENTS | kit gate EXIT 0; dash scan clean |
 | S1 | front end on the leaf surface (Q9); R1 cells and `REFUSE_CELL`, `REFUSE_DATA`; base enums, `Nat`, `Bit`, `A` as `CMon` (monoid plus commutativity, cancellation and a decidable order; Pi parameter, Q8), records (Q1, Q2, Q4, Q6); `langc fmt`; `langc check --json` with fix hints and counts parsed and typed | fmt round-trip; one JSON shape test per refusal code; R1 refusal rows; kit regressions pass |
-| S2 | domain prelude in the clear: `kappa`, W1 to W3, `Tally`, `theta`, `Amd`, `T` (Q5, Q7), the transcript fold, the 10 operations; law discharge (section 6) | each law row discharged on the examples; mutants of `theta`, W1 and Invariant I are killed |
+| S2a | checker formers (O8, O9; USER 2026-10-27 "Split S2a/S2b (Recommended)"): a dependent `ind` for `Nat` and for each domain family; a recursive field with the uniform parameters of its family; `FreeMon` in place of `Stack` and `Tree`; the `Nat` instance of `CMon`; the `laws` count | rows for `ind` and uniform recursion in the tools; a mutant of each former is killed; kit regressions pass on `FreeMon` |
+| S2b | domain prelude in the clear: `kappa`, W1 to W3, `Tally`, `theta`, `Amd`, `T` (Q5, Q7), the transcript fold, the 10 operations; law discharge (section 6) | each law row discharged on the examples; mutants of `theta`, W1 and Invariant I are killed |
 | S3 | Wasm for the clear meaning (client and node entry points) | wasm-validate; differential against `langc eval`, 0 mismatches |
 | S4 | Poseidon2 (Q-C4), Merkle root, PRF, hash chain; FROST verify (Q-C1) | published test vectors (RFC 9591 Appendix E; Poseidon2 reference vectors for the chosen field) |
 | S5 | TFHE runtime (Q-C2, Q-C6) and the FHE circuit IR (5.3) | equation (1.1) differential on each FHE circuit; PBS time budget recorded |
@@ -316,7 +322,7 @@ S5 and S6 are the largest slices (Q-C2).
 
 | ID | Item | Status |
 |---|---|---|
-| O-off-1 to O-off-8 | the note's open items (L647 to L654); Q10 takes the note drafts | OPEN |
+| O-off-1 to O-off-8 | the note's open items (L647 to L654); Q10 (a) takes the note drafts | OPEN (S2b) |
 | O1 | where the vote prover runs: the client Wasm module, or a native prover outside charter-lang (zkml-lang `make halo2-check` runs outside the sandbox) | OPEN (S7) |
 | O2 | ZK verify in the Wasm verifier needs a BN254 pairing for KZG under Q-C3 (a); its cost is not measured | OPEN (S8) |
 | O3 | under Q-C5 (a) the dealer sees `sk_e`; this departs from L490 and L499 | OPEN (S6) |
@@ -324,13 +330,13 @@ S5 and S6 are the largest slices (Q-C2).
 | O5 | the 128-bit TFHE parameter set and its source (Q-C2); no local file to verify one | OPEN (S5) |
 | O6 | a change of FHE scheme or proof system is not an `enact` and needs a proof that `sem` does not change (L636) | OPEN |
 | O7 | token counter: a fixed offline proxy, as leaf-lang Q13 | OPEN (S9) |
-| O8 | the `Nat` instance of `CMon`: its law fields need induction proofs that the kit checker cannot write yet (USER accepted this cost, Q8) | OPEN (S2) |
-| O9 | the domain keeps the kit data types `Stack` and `Tree` as kit regression subjects (spine lowering, `REFUSE_RUNTIME_TREE`, the large-stack review row); USER ruling 2026-10-27: "Keep Stack, Tree only (Recommended)" | OPEN (S2: FreeMon replaces them) |
+| O8 | the `Nat` instance of `CMon`: its law fields need induction proofs that the kit checker cannot write yet (USER accepted this cost, Q8) | RULED 2026-10-27: "(a) Add `ind` former (Recommended)"; S2a |
+| O9 | the domain keeps the kit data types `Stack` and `Tree` as kit regression subjects (spine lowering, `REFUSE_RUNTIME_TREE`, the large-stack review row); USER ruling 2026-10-27: "Keep Stack, Tree only (Recommended)" | RULED 2026-10-27: "(a) Lift for uniform params (Recommended)"; S2a: FreeMon replaces Stack; Q-S2a-1 USER 2026-10-27: "(a) Keep Tree (Recommended)": `Tree` stays the only kit subject; Q-S2a-2 USER 2026-10-27: "(a) R1 free-monoid class (Recommended)": R1 accepts a second class, one type parameter `A`, a constructor without fields and a constructor with exactly a field of type `A` and a uniform recursive field; the kit derives no pure, map or bind for it |
 
 ## 11. Q items
 
 Each row: the question, (a) the recommended option, the other options,
-the scope cost, the status. Rows Q1, Q2, Q4, Q6, Q8 and Q9 are RULED
+the scope cost, the status. Rows Q1, Q2, Q4 to Q10 and Q-S2a-3 are RULED
 2026-10-27: the Status cell quotes the USER ruling verbatim. The other rows
 are OPEN.
 
@@ -340,12 +346,13 @@ are OPEN.
 | Q2 | arrows `S -> T S` (L285) | ambient Pi; R1 limits declared constructors only | none | none (S1) | RULED 2026-10-27, (a): "Q2 = Use plain function types (Pi) for arrows)" |
 | Q3 | `Ct_e`, `Share_e` (L207, L208) | base types `CtA e`, `CtOneHot e`, `CtBit e`, `DecShare e`, `SigShare e`, indexed by the epoch value; meaning maps law-only | (b) sealed identity CM `Ct : U -> U` (quorum `Hidden`); (c) quotient HIT | small (S5) | OPEN |
 | Q4 | records (L228, L256, L257) | named iterated Sigma (quorum O15); CC stays admitted with no domain use | (b) leaf style, no record form | small (S1) | RULED 2026-10-27, (a): "Q4 = use iterated Sigma" |
-| Q5 | `T` (L285, L286) | one CM in `domain/domain.lang`: generator `ret`, 0-cell `none`, operation `emit : Voucher -> T Z -> T Z`, 1-cell `emit v none = none`, set truncation; normal forms `1 + Z x List Voucher`; bind is the recursor; Kleisli laws by induction | (b) `Option` and `Writer` with a distributive law; (c) a defined composite `Option (Z x FreeMon Voucher)` | medium (S2) | OPEN |
+| Q5 | `T` (L285, L286) | one CM in `domain/domain.lang`: generator `ret`, 0-cell `none`, operation `emit : Voucher -> T Z -> T Z`, 1-cell `emit v none = none`, set truncation; normal forms `1 + Z x List Voucher`; bind is the recursor; Kleisli laws by induction | (b) `Option` and `Writer` with a distributive law; (c) a defined composite `Option (Z x FreeMon Voucher)` | medium (S2) | RULED 2026-10-27, (a): "(a) One CM (Recommended)"; `T Z` needs the S2a uniform-parameter recursion (O9) |
 | Q6 | `Nat`, `Bit` | base types (closed data that R2 limits) | (b) `mu X. 1 + X` | none (S1) | RULED 2026-10-27, (a): "Q6 = Nat and Bit are base types" |
-| Q7 | the orbit quotient (L251) | no HIT; `Tally` (Def 2.2, L236) represents the orbit; rules only as `theta : Tally -> D_E`, so W3 holds by construction (L243); Kan laws erased at discrete `D` (Prop 2.6) | (b) a set-quotient HIT | none (S2) | OPEN |
+| Q7 | the orbit quotient (L251) | no HIT; `Tally` (Def 2.2, L236) represents the orbit; rules only as `theta : Tally -> D_E`, so W3 holds by construction (L243); Kan laws erased at discrete `D` (Prop 2.6) | (b) a set-quotient HIT | none (S2) | RULED 2026-10-27, (a): "(a) Tally, no HIT (Recommended)" |
 | Q8 | `A` (L227) | `A = Nat` in the meaning; 64-bit bound in Wasm and FHE (radix `u64`); no overflow in `T` | (b) an abstract monoid with an instance per target | small (S1) | RULED 2026-10-27, not (a). After S0: "Q8 = Try to use general magma, semigroup, or monoid, in that order, before specializing to Nat for the asset type". In S1, Q8-form: "Structure as a Pi parameter"; Q8-laws: "Monoid + those laws (Recommended)". Result: `CMon` (3.1) |
 | Q9 | surface | port the leaf surface: Unicode canonical, ASCII aliases with `W_NONCANON` | (b) ASCII only | small (S1) | RULED 2026-10-27, (a): "Q9 = reuse leaf-lang surface syntax" |
-| Q10 | O-off-1 to O-off-8 | take the note drafts (L647 to L654) | (b) rule each | none (S2) | OPEN |
+| Q10 | O-off-1 to O-off-8 | take the note drafts (L647 to L654) | (b) rule each | none (S2) | RULED 2026-10-27, (a): "(a) Take note drafts (Recommended)" |
+| Q-S2a-3 | the Monus rules of `natCMon` (`monus`, the laws `monusSound` and `monusComplete`) | 5 rules in the normalizer: `natLe 0 y = true`, `natLe (natAdd x 1) 0 = false`, `natLe (natAdd x 1) (natAdd y 1) = natLe x y`, `natSub x 0 = x`, `natSub (natAdd x 1) (natAdd y 1) = natSub x y`; `monus b a = flagIf (natLe a b) (some (natSub b a)) none` (SPEC 2.7) | none recorded | small (S2a) | RULED 2026-10-27, (a): "(a) 5 natLe/natSub rules (Recommended)" |
 | Q-C1 | FROST ciphersuite | FROST(Ed25519, SHA-512), RFC 9591, context "FROST-ED25519-SHA512-v1", Appendix E vectors, Pedersen DKG for `vk`; no EVM, so secp256k1 gives nothing | (b) FROST(secp256k1, SHA-256) (quorum) | one slice (S4) | OPEN |
 | Q-C2 | FHE scheme and parameter set | threshold TFHE (CGGI, PBS, 64-bit torus); `A` as radix `u64`, 32 blocks of 2-bit message and 2-bit carry; the 128-bit set is OPEN (unverified candidate: tfhe-rs `PARAM_MESSAGE_2_CARRY_2_KS_PBS`), verified at S5 | (b) threshold BFV or BGV (no PBS; `theta` and `n <= credit a` become deep polynomial circuits) | largest (S5, S6) | OPEN |
 | Q-C3 | proof system | Halo2 (KZG, BN254) by `build/halo2print`; LWE well-formedness of `beta` as mod 2^64 arithmetic in Fr with a quotient witness, 64-bit range checks and a one-hot check | (b) Plonky3 BabyBear by `build/plonky3print` (64-bit limbs in a 31-bit field); (c) LLZK only; (d) a lattice-native proof of knowledge outside zkml-lang (unverified) | one slice (S7) plus O2 | OPEN |
@@ -354,4 +361,4 @@ are OPEN.
 | Q-C6 | where the crypto runtime lives in Wasm | charter-lang prelude code that `langc` lowers into each module (all bytes from the tcc-built `langc`; leaf Q9 (a) precedent); new IR ops at S4 | (b) hand-built Wasm kernels that C in `src/wasm.c` emits; (c) host imports (bends Wasm-only and TinyCC); (d) clang wasm32 and wasm-ld (bends TinyCC; Apple clang has no wasm32); (e) tfhe-rs in Wasm (bends both; unverified) | medium (S4, S5); PBS speed O4 | OPEN |
 | Q-C7 | threshold decryption | noise flooding with a 40-bit statistical parameter; decrypt after a switch to a larger decryption set; each partial decryption carries a ZK share proof (Q-C3 system); numbers set with Q-C2 | (b) Renyi small flooding, a bound on decryptions per epoch key; (c) none (test only) | part of S6 | OPEN |
 
-S1 depends on Q1, Q2, Q4, Q6, Q8 and Q9. S2 adds Q5, Q7 and Q10.
+S1 depends on Q1, Q2, Q4, Q6, Q8 and Q9. S2 adds Q5, Q7 and Q10. S2a also needs the O8 and O9 rulings (section 10).

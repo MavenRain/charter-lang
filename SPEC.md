@@ -37,26 +37,26 @@ are not the same, or if a clause has no signature, the parser gives
 parses, and `fmt` prints it as `f x = t`. An annotated lambda
 `λ (x : A) → t` is a different term, and `fmt` keeps it.
 
-The domain file (`domain/domain.lang`) can also use these forms:
+The domain file (`domain/domain.lang`) can also declare a data type:
 
 ```
-rec name : T
-name x = t
-
-postulate name : T
-
 data Lot (size : ℕ) : Type where
   makeLot : (lotPrice : ℕ) → Lot size
 ```
 
-- `rec` before a signature marks a recursive definition.
-- `postulate` gives a name and a type with no definition.
 - `data` declares a data type, with zero or more parameter groups. Each
   constructor is on its own line in the block. A constructor type must end
   in the data type applied to its parameters in order. If it does not, or
   if a field has no name, the parser gives `PARSE_CTOR_RESULT`. Each named
   Pi binder of a constructor type is a field: `(addressKey : ℕ)` gives the
-  field `addressKey`.
+  field `addressKey`. A field whose type is the data type itself is a
+  recursive field. Its arguments must be the parameters of the data type,
+  in order (uniform recursion, section 2.7). If they are not, the checker
+  gives `DOMAIN_FAMILY`.
+
+The parser also reads `rec name : T` and `postulate name : T`. The checker
+refuses both in each file, `domain/domain.lang` too: `rec` gives
+`REFUSE_REC` (rule R3) and `postulate` gives `REFUSE_AXIOM` (rule R2).
 
 The compiler refuses these forms in a program: `data` (`REFUSE_DATA`),
 `postulate` (`REFUSE_AXIOM`), and `rec` or a reference to the same or a
@@ -64,7 +64,8 @@ later definition (`REFUSE_REC`, rule R3). It also refuses a declaration
 that uses a core name, a domain name, the reserved word `Text` or a name
 that is already declared (`REFUSE_NAME`). Thus a program cannot add a data
 type, an unproved fact or general recursion. Recursion comes only from
-`fold` (F6). The compiler writes the target; a program cannot.
+`fold` (F6) and `ind` (section 2.7). The compiler writes the target; a
+program cannot.
 
 ### 2.2 Grammar
 
@@ -164,6 +165,34 @@ time. A region is the text from the end of the last line of the previous
 declaration to the end of the last line of this declaration. The first
 region that is not the same as its canonical text gives `W_NONCANON`. The
 end of the file is the last region.
+
+### 2.7 Induction and the Nat rules
+
+`ind` is the dependent eliminator (S2a). Proofs use it. An `ind` on a
+constant value reduces before lowering. `langc ir` refuses an `ind` that
+stays on a run-time value (`REFUSE_RUNTIME_TREE`).
+
+| Rule | Statement |
+|---|---|
+| `ind` on `ℕ` | `ind P z s n` with `P : ℕ → Type l`, `z : P 0` and `s : (k : ℕ) → P k → P (natAdd k 1)` has the type `P n`. It computes on a literal and on `natAdd k j` for a literal `j`. A bad motive gives `TYPE_MISMATCH`. |
+| `ind` on a domain family | `ind P c1 .. cn x` with `x : F p1 .. pm` and `P : F p1 .. pm → Type l` has the type `P x`. There is one case for each constructor, in order: a Pi over each field, with `ih : P f` after each recursive field `f`, to `P (ctor p1 .. pm fields)`. It computes on a constructor value. |
+| uniform recursion | A recursive field of `F` has the type `F p1 .. pm`, and each argument is the parameter of `F` at the same position. Another argument gives `DOMAIN_FAMILY`. `fold` and `ind` take the parameter instance, for example `FreeMon ℕ`. |
+| `natAdd` | `natAdd x 0 = x`; `natAdd x (natAdd y j) = natAdd (natAdd x y) j` for a literal `j`. |
+| `natLe` | `natLe 0 y = true`; `natLe (natAdd x 1) 0 = false`; `natLe (natAdd x 1) (natAdd y 1) = natLe x y`. |
+| `natSub` | `natSub x 0 = x`; `natSub (natAdd x 1) (natAdd y 1) = natSub x y`. |
+
+The `natLe` and `natSub` rows are the USER ruling Q-S2a-3 (`docs/PLAN.md`
+section 11). The normalizer cancels a common literal offset in one step.
+A closing rule applies only when the offsets agree with it: for a
+variable `x`, the terms `natLe 3 x`, `natLe x 0` and `natSub x 3` stay
+neutral (the `TYPE_REFL` rows in `test/fronttool.c`).
+
+These symbolic successor rules are for type checking. Execution and Wasm
+lowering retain the arithmetic operations that can overflow at the 64-bit
+boundary, including operations whose numeric result a proof rule erases.
+They evaluate definitions afresh rather than reuse proof-normalized values.
+An `ind` on a symbolic successor stays neutral during lowering and is
+refused as a run-time `ind`.
 
 ## 3. Type formers
 

@@ -19,8 +19,8 @@ toggle b = fold bitOne bitZero b
 toggled : Bit
 toggled = toggle bitZero
 
-pile : Stack
-pile = push 1 (push 2 bottom)
+pile : FreeMon ℕ
+pile = fmCons ℕ 1 (fmCons ℕ 2 (fmNil ℕ))
 
 pileDepth : ℕ
-pileDepth = fold 0 (λ (top : ℕ) (rest : ℕ) → natAdd rest 1) pile
+pileDepth = fold 0 (λ (h : ℕ) (rest : ℕ) → natAdd rest 1) pile

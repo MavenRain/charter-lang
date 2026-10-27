@@ -16,8 +16,8 @@ static const char *const OP_NAMES[] = {
   [OP_NONE] = "none", [OP_SOME] = "some", [OP_NIL] = "nil", [OP_CONS] = "cons",
   [OP_PACK] = "pack", [OP_REFL] = "refl", [OP_CTOR] = "?", [OP_FIRST] = "first",
   [OP_SECOND] = "second", [OP_EITHER] = "either", [OP_OPTION_ELIM] = "option",
-  [OP_PURE] = "pure", [OP_MAP] = "map", [OP_BIND] = "bind", [OP_FOLD_NAT] = "fold",
-  [OP_FOLD_LIST] = "fold", [OP_FOLD_FAMILY] = "fold", [OP_UNFOLD] = "unfold",
+  [OP_PURE] = "pure", [OP_MAP] = "map", [OP_BIND] = "bind", [OP_FOLD_NAT] = "fold", [OP_IND_NAT] = "ind",
+  [OP_FOLD_LIST] = "fold", [OP_FOLD_FAMILY] = "fold", [OP_IND_FAMILY] = "ind", [OP_UNFOLD] = "unfold",
   [OP_FILTER] = "filter", [OP_WITNESS] = "witness", [OP_PAYLOAD] = "payload",
   [OP_SYMM] = "symm", [OP_TRANS] = "trans", [OP_TRANSPORT] = "transport",
   [OP_CONG] = "cong", [OP_NAT_ADD] = "natAdd", [OP_NAT_SUB] = "natSub",
@@ -34,8 +34,8 @@ static const unsigned char OP_ARITY[] = {
   [OP_INL] = 1, [OP_INR] = 1, [OP_NONE] = 0, [OP_SOME] = 1, [OP_NIL] = 0,
   [OP_CONS] = 2, [OP_PACK] = 2, [OP_REFL] = 0, [OP_CTOR] = VARIES, [OP_FIRST] = 1,
   [OP_SECOND] = 1, [OP_EITHER] = 3, [OP_OPTION_ELIM] = 3, [OP_PURE] = 1,
-  [OP_MAP] = 2, [OP_BIND] = 2, [OP_FOLD_NAT] = 3, [OP_FOLD_LIST] = 3,
-  [OP_FOLD_FAMILY] = VARIES, [OP_UNFOLD] = 3, [OP_FILTER] = 2, [OP_WITNESS] = 1,
+  [OP_MAP] = 2, [OP_BIND] = 2, [OP_FOLD_NAT] = 3, [OP_IND_NAT] = 4, [OP_FOLD_LIST] = 3,
+  [OP_FOLD_FAMILY] = VARIES, [OP_IND_FAMILY] = VARIES, [OP_UNFOLD] = 3, [OP_FILTER] = 2, [OP_WITNESS] = 1,
   [OP_PAYLOAD] = 1, [OP_SYMM] = 1, [OP_TRANS] = 2, [OP_TRANSPORT] = 3,
   [OP_CONG] = 2, [OP_NAT_ADD] = 2, [OP_NAT_SUB] = 2, [OP_NAT_MUL] = 2,
   [OP_NAT_EQ] = 2, [OP_NAT_LE] = 2, [OP_FLAG_IF] = 3, [OP_PROJ] = 1
@@ -221,6 +221,15 @@ static const Value *env_lookup(Machine *m, const Env *env, uint32_t index) {
   if (env == NULL)
     return internal(m, "a variable outside its scope");
   return env->value;
+}
+
+void runtime_begin(Machine *m) {
+  uint32_t i;
+  if (m->runtime)
+    return;
+  m->runtime = 1;
+  for (i = 0; i < m->def_count; i++)
+    m->defs[i].value = NULL;
 }
 
 const Value *def_value(Machine *m, uint32_t index) {
@@ -507,6 +516,41 @@ static const Value *reduce_fold_nat(Machine *m, const Value *const *a, uint32_t 
   return acc;
 }
 
+static const Value *nat_add(Machine *m, const Value *const *a, uint32_t n);
+
+/* 1 when V is natAdd x j with a literal j: the successor view (S2a, D18). */
+static int lit_sum(const Value *v) {
+  return v != NULL && v->kind == VAL_STUCK && v->op == OP_NAT_ADD && v->argc == 2u && v->args[1] != NULL && v->args[1]->kind == VAL_NAT;
+}
+
+/* ind P z s n (S2a, O8): z at 0, and s k (ind P z s k) at the successor
+   of k. A scrutinee natAdd x j with a literal j is j successors of x, so
+   ind also computes on natAdd k 1 for a variable k. Port of quorum-lang
+   09f7f59 reduce_elim_nat. */
+static const Value *reduce_ind_nat(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *x = a[3];
+  const Value *acc;
+  const Value *out;
+  uint64_t k;
+  if (!m->runtime && lit_sum(x)) {
+    const Value *sub[4] = {a[0], a[1], a[2], x->args[0]};
+    acc = reduce_ind_nat(m, sub, 4u);
+    for (k = 0; k < x->args[1]->nat && acc != NULL; k++) {
+      const Value *add[2] = {x->args[0], val_nat(m, k)};
+      acc = spend(m, 1) ? apply_value(m, apply_value(m, a[2], nat_add(m, add, 2u)), acc) : NULL;
+    }
+    return acc;
+  }
+  if (blocked(m, x, OP_IND_NAT, 0, 0, a, n, &out))
+    return out;
+  if (x->kind != VAL_NAT)
+    return internal(m, "an ind of a value that is not a Nat");
+  acc = a[1];
+  for (k = 0; k < x->nat && acc != NULL; k++)
+    acc = spend(m, 1) ? apply_value(m, apply_value(m, a[2], val_nat(m, k)), acc) : NULL;
+  return acc;
+}
+
 /* fold f z xs: the right fold. The end of the list is folded first. */
 static const Value *reduce_fold_list(Machine *m, const Value *const *a) {
   const Value *acc = NULL;
@@ -571,6 +615,52 @@ static const Value *fold_family(Machine *m, uint32_t family, const Value *const 
   for (i = 0; i < ctor->field_count && acc != NULL; i++) {
     field = x->args[fam->param_count + i];
     acc = apply_value(m, acc, ctor->fields[i].recursive ? fold_family(m, family, cases, ncases, field) : field);
+  }
+  m->depth--;
+  return acc;
+}
+
+static const Value *ind_family(Machine *m, uint32_t family, const Value *const *a, uint32_t n);
+
+/* ind P c1 .. cn X: the arguments A of an ind with X as the scrutinee. */
+static const Value *ind_at(Machine *m, uint32_t family, const Value *const *a, uint32_t n, const Value *x) {
+  const Value **sub = arena_alloc(m->arena, (size_t)n * sizeof *sub);
+  uint32_t i;
+  if (sub == NULL)
+    return oom(m);
+  for (i = 0; i + 1u < n; i++)
+    sub[i] = a[i];
+  sub[n - 1u] = x;
+  return ind_family(m, family, sub, n);
+}
+
+/* ind P c1 .. cn x over a domain family (S2a item 4): the case of the
+   constructor of X, applied to each field and, after a recursive field f,
+   to ind P c1 .. cn f. A[0] is P and A[N-1] is X. Stuck on a neutral. */
+static const Value *ind_family(Machine *m, uint32_t family, const Value *const *a, uint32_t n) {
+  const Value *x = a[n - 1u];
+  const FamilyInfo *fam;
+  const CtorInfo *ctor;
+  const Value *acc;
+  const Value *out;
+  uint32_t i;
+  if (x == NULL)
+    return NULL;
+  if (blocked(m, x, OP_IND_FAMILY, family, 0, a, n, &out))
+    return out;
+  if (!val_is(x, OP_CTOR) || x->inst >= m->ctor_count || family >= m->family_count)
+    return internal(m, "an ind of a value that is not in the family");
+  fam = &m->families[family];
+  ctor = &m->ctors[x->inst];
+  if (x->inst < fam->first_ctor || x->inst - fam->first_ctor + 2u >= n || x->argc != fam->param_count + ctor->field_count)
+    return internal(m, "an ind of a constructor of another family");
+  if (!enter(m))
+    return NULL;
+  acc = a[1u + x->inst - fam->first_ctor];
+  for (i = 0; i < ctor->field_count && acc != NULL; i++) {
+    const Value *field = x->args[fam->param_count + i];
+    acc = apply_value(m, acc, field);
+    acc = acc != NULL && ctor->fields[i].recursive ? apply_value(m, acc, ind_at(m, family, a, n, field)) : acc;
   }
   m->depth--;
   return acc;
@@ -710,15 +800,57 @@ static const Value *nat_add(Machine *m, const Value *const *a, uint32_t n) {
   const Value *out;
   uint64_t x = 0;
   uint64_t y = 0;
+  if (a[1]->kind == VAL_NAT && a[1]->nat == 0u)
+    return a[0];
+  if (lit_sum(a[1])) {
+    const Value *inner[2] = {a[0], a[1]->args[0]};
+    const Value *outer[2] = {nat_add(m, inner, 2u), a[1]->args[1]};
+    return outer[0] == NULL ? NULL : nat_add(m, outer, 2u);
+  }
   if (!nat_args(m, OP_NAT_ADD, a, n, &x, &y, &out))
     return out;
   return x + y < x ? overflow(m) : val_nat(m, x + y);
+}
+
+static const Value *nat_sub(Machine *m, const Value *const *a, uint32_t n);
+static const Value *nat_test(Machine *m, Op op, const Value *const *a, uint32_t n);
+
+/* natLe and natSub on the successor view (S2a, USER ruling (a)): natLe 0 y
+   = true, natLe (x + 1) 0 = false, natLe (x + 1) (y + 1) = natLe x y,
+   natSub x 0 = x, natSub (x + 1) (y + 1) = natSub x y. Here x + j is
+   natAdd x j with a literal j, or a literal; a common offset goes in one
+   step. 1 when a rule applies, with the result in *OUT. */
+static int nat_view(Machine *m, Op op, const Value *const *a, const Value **out) {
+  const Value *base[2] = {a[0], a[1]};
+  uint64_t off[2] = {0, 0};
+  uint64_t d;
+  uint32_t i;
+  if (m->runtime || a[0]->kind == VAL_TRAP || a[1]->kind == VAL_TRAP || (a[0]->kind == VAL_NAT && a[1]->kind == VAL_NAT))
+    return 0;
+  for (i = 0; i < 2u; i++) {
+    base[i] = a[i]->kind == VAL_NAT ? NULL : lit_sum(a[i]) ? a[i]->args[0] : a[i];
+    off[i] = a[i]->kind == VAL_NAT ? a[i]->nat : lit_sum(a[i]) ? a[i]->args[1]->nat : 0u;
+  }
+  d = off[0] < off[1] ? off[0] : off[1];
+  if (d > 0u) {
+    const Value *r[2] = {NULL, NULL};
+    for (i = 0; i < 2u; i++) {
+      const Value *sum[2] = {base[i], val_nat(m, off[i] - d)};
+      r[i] = base[i] == NULL ? sum[1] : nat_add(m, sum, 2u);
+    }
+    *out = r[0] == NULL || r[1] == NULL ? NULL : op == OP_NAT_LE ? nat_test(m, op, r, 2u) : nat_sub(m, r, 2u);
+    return 1;
+  }
+  *out = op == OP_NAT_LE && base[0] == NULL && off[0] == 0u ? flag(m, 1) : op == OP_NAT_LE && base[1] == NULL && off[1] == 0u && off[0] > 0u ? flag(m, 0) : op == OP_NAT_SUB && base[1] == NULL && off[1] == 0u ? a[0] : NULL;
+  return *out != NULL;
 }
 
 static const Value *nat_sub(Machine *m, const Value *const *a, uint32_t n) {
   const Value *out;
   uint64_t x = 0;
   uint64_t y = 0;
+  if (nat_view(m, OP_NAT_SUB, a, &out))
+    return out;
   if (!nat_args(m, OP_NAT_SUB, a, n, &x, &y, &out))
     return out;
   return val_nat(m, x < y ? 0 : x - y);
@@ -737,6 +869,8 @@ static const Value *nat_test(Machine *m, Op op, const Value *const *a, uint32_t 
   const Value *out;
   uint64_t x = 0;
   uint64_t y = 0;
+  if (op == OP_NAT_LE && nat_view(m, op, a, &out))
+    return out;
   if (!nat_args(m, op, a, n, &x, &y, &out))
     return out;
   return flag(m, op == OP_NAT_EQ ? x == y : x <= y);
@@ -774,6 +908,8 @@ static uint32_t varied_arity(const Machine *m, Op op, uint32_t inst) {
     return f->param_count;
   if (op == OP_FOLD_FAMILY && f != NULL)
     return f->ctor_count + 1u;
+  if (op == OP_IND_FAMILY && f != NULL)
+    return f->ctor_count + 2u;
   return UINT32_MAX;
 }
 
@@ -832,10 +968,14 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
     return reduce_bind(m, inst, a, n);
   case OP_FOLD_NAT:
     return reduce_fold_nat(m, a, n);
+  case OP_IND_NAT:
+    return reduce_ind_nat(m, a, n);
   case OP_FOLD_LIST:
     return reduce_fold_list(m, a);
   case OP_FOLD_FAMILY:
     return fold_family(m, inst, a, n - 1u, a[n - 1u]);
+  case OP_IND_FAMILY:
+    return ind_family(m, inst, a, n);
   case OP_UNFOLD:
     return reduce_unfold(m, a, n);
   case OP_FILTER:

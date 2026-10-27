@@ -7,18 +7,21 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S1)
+## Status (S2a)
 
 Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
 the leaf-lang surface; `langc fmt` with one canonical form per operation;
 `langc check --json` with fix hints and the counts parsed and typed; the
 R1 refusals `REFUSE_CELL` and `REFUSE_DATA`; the base data of
 `domain/domain.lang` (`DecE`, `BallotA`, `DecA`, `Bit`, `Address`, `CMon`,
-`Voucher M`, `Claim M`). The escrow operations and the laws are not built.
+`Voucher M`, `Claim M`, `FreeMon A`); the dependent eliminator `ind` for
+`ℕ` and for each domain family; a recursive field with the uniform
+parameters of its family; the R1 free monoid class; `natCMon` in
+`examples/assets.lang`; the `laws` count of `langc check --json` (S2a).
+The escrow operations and the S2b laws are not built.
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
-- the count of laws discharged in `langc check --json` (S2; the progress
-  line gives `0 of 0` now).
+- the law rows of `docs/PLAN.md` section 6 and the escrow operations (S2b).
 - `skills/charter-lang/SKILL.md` with 3 to 5 graded examples (S9).
 - `langc mcp`, an MCP server in C that tcc builds (S9).
 - `docs/TOKEN-BASELINE.md`, token counts against Python and Rust (S9).

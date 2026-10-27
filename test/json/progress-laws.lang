@@ -1,0 +1,9 @@
+-- laws is 1 of 2: the second law does not type-check, and one is not a law.
+one : ℕ
+one = 1
+
+unitR : (a : ℕ) → Eq ℕ (natAdd a 0) a
+unitR a = refl
+
+bad : Eq ℕ (natAdd one 1) one
+bad = refl

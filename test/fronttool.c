@@ -173,6 +173,50 @@ int main(int argc, char **argv) {
                "data Twice (A : Type 0) : Type where\n  once : (x : A) → Twice A\n  again : (y : Id A) → Twice A", "REFUSE_CELL");
   ok &= domain("data List : Type where\n  makeList : (code : ℕ) → List", "REFUSE_NAME");
   ok &= domain("cons : ℕ\ncons = 1", "REFUSE_NAME");
+  ok &= domain("unitL : (a : ℕ) → Eq ℕ (natAdd 0 a) a\n"
+               "unitL a = ind (λ (n : ℕ) → Eq ℕ (natAdd 0 n) n) refl "
+               "(λ (k : ℕ) (ih : Eq ℕ (natAdd 0 k) k) → cong (λ (x : ℕ) → natAdd x 1) ih) a", NULL);
+  ok &= domain("bad : ℕ\nbad = ind (λ (n : Bool) → ℕ) 0 (λ (k : ℕ) (ih : ℕ) → ih) 3", "TYPE_MISMATCH");
+  ok &= domain("data Run (n : ℕ) : Type where\n  runEnd : Run n\n  runStep : (runVal : ℕ) → (runNext : Run n) → Run n\n\n"
+               "runSum : ℕ → ℕ\nrunSum k = fold 0 (λ (v : ℕ) (acc : ℕ) → natAdd v acc) (runStep 2 k (runEnd 2))", NULL);
+  ok &= domain("data Emit (Z : Type 0) : Type where\n  emRet : (emZ : Z) → Emit Z\n  emNone : Emit Z\n"
+               "  emStep : (emV : ℕ) → (emT : Emit Z) → Emit Z", NULL);
+  ok &= domain("data Run (n : ℕ) : Type where\n  runEnd : Run n\n  runStep : (runVal : ℕ) → (runNext : Run n) → Run n\n\n"
+               "runF : (r : Run 2) → ℕ\nrunF r = fold 0 (λ (v : ℕ) (acc : ℕ) → natAdd v acc) r\n\n"
+               "runI : (r : Run 2) → ℕ\nrunI r = ind (λ (x : Run 2) → ℕ) 0 (λ (v : ℕ) (t : Run 2) (ih : ℕ) → natAdd v ih) r\n\n"
+               "runSame : (r : Run 2) → Eq ℕ (runF r) (runI r)\n"
+               "runSame r = ind (λ (x : Run 2) → Eq ℕ (runF x) (runI x)) refl "
+               "(λ (v : ℕ) (t : Run 2) (ih : Eq ℕ (runF t) (runI t)) → cong (λ (y : ℕ) → natAdd v y) ih) r", NULL);
+  ok &= domain("data Run (n : ℕ) : Type where\n  runEnd : Run n\n  runStep : (runVal : ℕ) → (runNext : Run n) → Run n\n\n"
+               "bad : (r : Run 2) → ℕ\nbad r = ind (λ (n : ℕ) → ℕ) 0 (λ (v : ℕ) (t : Run 2) (ih : ℕ) → natAdd v ih) r",
+               "TYPE_MISMATCH");
+  ok &= domain("data Emit (Z : Type 0) : Type where\n  emRet : (emZ : Z) → Emit Z\n  emNone : Emit Z\n"
+               "  emStep : (emV : ℕ) → (emT : Emit Z) → Emit Z\n\n"
+               "emSum : (e : Emit ℕ) → ℕ\n"
+               "emSum e = ind (λ (x : Emit ℕ) → ℕ) (λ (z : ℕ) → z) 0 (λ (v : ℕ) (t : Emit ℕ) (ih : ℕ) → natAdd v ih) e\n\n"
+               "emLaw : (v : ℕ) → (t : Emit ℕ) → Eq ℕ (emSum (emStep ℕ v t)) (natAdd v (emSum t))\nemLaw v t = refl", NULL);
+  /* R1 second class (Q-S2a-2): a free monoid, and the cons forms it refuses. */
+  ok &= domain("data FreeM (A : Type 0) : Type where\n  frNil : FreeM A\n  frCons : (frHead : A) → (frTail : FreeM A) → FreeM A", NULL);
+  ok &= domain("data TwoA (A : Type 0) : Type where\n  twNil : TwoA A\n  twCons : (twHead : A) → (twNext : A) → TwoA A", "REFUSE_CELL");
+  ok &= domain("data NoTail (A : Type 0) : Type where\n  ntNil : NoTail A\n  ntCons : (ntHead : A) → (ntCode : ℕ) → NoTail A", "REFUSE_CELL");
+  ok &= domain("data SkewM (A : Type 0) : Type where\n  smNil : SkewM A\n  smCons : (smHead : A) → (smTail : SkewM ℕ) → SkewM A", "DOMAIN_FAMILY");
+  ok &= domain("data ExtraM (A : Type 0) : Type where\n  exNil : ExtraM A\n  exOne : (exVal : A) → ExtraM A\n  exCons : (exHead : A) → (exTail : ExtraM A) → ExtraM A", "REFUSE_CELL");
+  ok &= domain("data Skew (A : Type 0) (B : Type 0) : Type where\n  skLeft : (skA : A) → Skew A B\n"
+               "  skRight : (skB : B) → Skew A B\n  skSwap : (skInner : Skew B A) → Skew A B", "DOMAIN_FAMILY");
+  ok &= domain("data Grow (n : ℕ) : Type where\n  grEnd : Grow n\n  grStep : (grNext : Grow (natAdd n 1)) → Grow n", "DOMAIN_FAMILY");
+  /* D31: natLe and natSub close on a variable only when the offsets make the result true for each value. */
+  ok &= domain("bad : (y : ℕ) → Eq Bool (natLe 3 y) true\nbad y = refl", "TYPE_REFL");
+  ok &= domain("bad : (x : ℕ) → Eq Bool (natLe x 0) false\nbad x = refl", "TYPE_REFL");
+  ok &= domain("bad : (x : ℕ) → Eq ℕ (natSub x 3) x\nbad x = refl", "TYPE_REFL");
+  ok &= domain("good : (x : ℕ) → Eq Bool (natLe (natAdd x 1) 0) false\ngood x = refl", NULL);
+  ok &= domain("data Choice : Type where\n  choiceA : Choice\n  choiceB : Choice\n\n"
+               "select : (b : Choice) → (n : ℕ) → ℕ\n"
+               "select b n = ind (λ (x : Choice) → ℕ → ℕ) (λ (k : ℕ) → k) (λ (k : ℕ) → natAdd k 1) b n\n\n"
+               "selected : Eq ℕ (select choiceB 4) 5\nselected = refl", NULL);
+  ok &= domain("data Three : Type where\n  threeA : Three\n  threeB : Three\n  threeC : Three\n\n"
+               "natResult : (n : ℕ) → (b : Three) → ℕ\n"
+               "natResult n b = ind (λ (x : ℕ) → Three → ℕ) (λ (t : Three) → 7) "
+               "(λ (k : ℕ) (ih : Three → ℕ) → ih) n b", NULL);
   if (ok) puts("domain regressions: passed");
   return ok ? 0 : 1;
 }

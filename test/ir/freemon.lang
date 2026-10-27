@@ -1,0 +1,7 @@
+-- A fold and an ind over a FreeMon ℕ value. The spine is a constant, so
+-- each reduces before lowering and `langc ir` lowers both (D26).
+fmTotal : (n : ℕ) → ℕ
+fmTotal n = fold n (λ (h : ℕ) (acc : ℕ) → natAdd h acc) (fmCons ℕ 2 (fmCons ℕ 3 (fmNil ℕ)))
+
+fmCount : (n : ℕ) → ℕ
+fmCount n = ind (λ (x : FreeMon ℕ) → ℕ) n (λ (h : ℕ) (t : FreeMon ℕ) (ih : ℕ) → natAdd ih 1) (fmCons ℕ 2 (fmCons ℕ 3 (fmNil ℕ)))

@@ -45,13 +45,16 @@
 {"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}
 == TYPE_REFL.lang exit 1
 {"code":"TYPE_REFL","severity":"error","span":{"file":"test/json/TYPE_REFL.lang","line":4,"col":1,"end_line":5,"end_col":13},"expected":null,"found":null,"fix":null,"retry":true,"message":"refl cannot prove the equality: the left side normalizes to 1201, the right side normalizes to 1200"}
-{"parsed":"2 of 2","typed":"1 of 2","laws":"0 of 0"}
+{"parsed":"2 of 2","typed":"1 of 2","laws":"0 of 1"}
 == TYPE_UNIVERSE.lang exit 1
 {"code":"TYPE_UNIVERSE","severity":"error","span":{"file":"test/json/TYPE_UNIVERSE.lang","line":1,"col":1,"end_line":2,"end_col":8},"expected":null,"found":null,"fix":null,"retry":true,"message":"Type 64 is above the largest universe Type 1"}
 {"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}
 == W_NONCANON.lang exit 0
 {"code":"W_NONCANON","severity":"warning","span":{"file":"test/json/W_NONCANON.lang","line":1,"col":1,"end_line":4,"end_col":1},"expected":"-- ASCII aliases parse; check gives W_NONCANON with the canonical text as fix.\u000akeep : ℕ → ℕ\u000akeep n = n\u000a","found":"-- ASCII aliases parse; check gives W_NONCANON with the canonical text as fix.\u000akeep : Nat -> Nat\u000akeep = fun n => n\u000a","fix":"-- ASCII aliases parse; check gives W_NONCANON with the canonical text as fix.\u000akeep : ℕ → ℕ\u000akeep n = n\u000a","retry":true,"message":"test/json/W_NONCANON.lang:1:1: lines 1 to 3 are not canonical; replace them with the fix text (the langc fmt output)"}
 {"parsed":"1 of 1","typed":"1 of 1","laws":"0 of 0"}
+== progress-laws.lang exit 1
+{"code":"TYPE_REFL","severity":"error","span":{"file":"test/json/progress-laws.lang","line":8,"col":1,"end_line":9,"end_col":11},"expected":null,"found":null,"fix":null,"retry":true,"message":"refl cannot prove the equality: the left side normalizes to 2, the right side normalizes to 1"}
+{"parsed":"3 of 3","typed":"2 of 3","laws":"1 of 2"}
 == progress-part.lang exit 1
 {"code":"TYPE_MISMATCH","severity":"error","span":{"file":"test/json/progress-part.lang","line":8,"col":1,"end_line":9,"end_col":11},"expected":null,"found":null,"fix":null,"retry":true,"message":"expected a term of type Nat, found a term of type Bool"}
 {"parsed":"3 of 3","typed":"2 of 3","laws":"0 of 0"}

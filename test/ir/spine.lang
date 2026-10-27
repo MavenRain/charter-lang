@@ -1,12 +1,12 @@
--- The spine lowerings. Each Stack here exists only at run time, so
+-- The spine lowerings. Each FreeMon ℕ here exists only at run time, so
 -- `langc ir` walks its spine. The gate compares `langc eval` results.
-stackSum : (n : ℕ) → ℕ
-stackSum n = fold 0 (λ (top : ℕ) (acc : ℕ) → natAdd top acc) (fold (λ (s : Stack) → push 5 s) bottom n)
+fmSum : (n : ℕ) → ℕ
+fmSum n = fold 0 (λ (h : ℕ) (acc : ℕ) → natAdd h acc) (fold (λ (s : FreeMon ℕ) → fmCons ℕ 5 s) (fmNil ℕ) n)
 
--- The last push has a trapped rest.
-stackTrap : (n : ℕ) → ℕ
-stackTrap n = fold 0 (λ (top : ℕ) (acc : ℕ) → top) (fold (λ (s : Stack) → push 5 s) (push 7 (fold (λ (s : Stack) → s) bottom (natAdd 18446744073709551615 1))) n)
+-- The last fmCons has a trapped tail.
+fmTrap : (n : ℕ) → ℕ
+fmTrap n = fold 0 (λ (h : ℕ) (acc : ℕ) → h) (fold (λ (s : FreeMon ℕ) → fmCons ℕ 5 s) (fmCons ℕ 7 (fold (λ (s : FreeMon ℕ) → s) (fmNil ℕ) (natAdd 18446744073709551615 1))) n)
 
 -- Consuming the recursive rest must propagate its trap.
-stackDemand : (n : ℕ) → ℕ
-stackDemand n = fold 0 (λ (top : ℕ) (acc : ℕ) → natAdd top acc) (fold (λ (s : Stack) → push 5 s) (push 7 (fold (λ (s : Stack) → s) bottom (natAdd 18446744073709551615 1))) n)
+fmDemand : (n : ℕ) → ℕ
+fmDemand n = fold 0 (λ (h : ℕ) (acc : ℕ) → natAdd h acc) (fold (λ (s : FreeMon ℕ) → fmCons ℕ 5 s) (fmCons ℕ 7 (fold (λ (s : FreeMon ℕ) → s) (fmNil ℕ) (natAdd 18446744073709551615 1))) n)

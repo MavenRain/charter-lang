@@ -48,6 +48,8 @@ typedef enum {
   OP_MAP,
   OP_BIND,
   OP_FOLD_NAT,
+  OP_IND_NAT,
+  OP_IND_FAMILY,
   OP_FOLD_LIST,
   OP_FOLD_FAMILY,
   OP_UNFOLD,
@@ -93,7 +95,7 @@ struct Core {
   uint32_t index;
   uint64_t nat;
   Op op;
-  /* OP_FAMILY, OP_FOLD_FAMILY: the family. OP_CTOR, OP_PROJ: the
+  /* OP_FAMILY, OP_FOLD_FAMILY, OP_IND_FAMILY: the family. OP_CTOR, OP_PROJ: the
      constructor. OP_PURE, OP_MAP, OP_BIND, OP_FILTER: the Carrier. */
   uint32_t inst;
   uint32_t field; /* OP_PROJ: the field number */
@@ -144,7 +146,7 @@ struct Value {
 typedef struct {
   const char *name;
   const Core *type; /* in the context of the family parameters */
-  int recursive;    /* the field type is the family itself */
+  int recursive;    /* the family at its own parameters (uniform) */
 } FieldInfo;
 
 typedef struct {
@@ -191,6 +193,7 @@ typedef struct {
   unsigned depth;
   uint64_t fuel;
   int overflowed;
+  int runtime; /* preserve checked arithmetic effects during execution/lowering */
   size_t checked;  /* check_program: the declarations before the current one */
   int decl_failed; /* check_program: 1 when declaration CHECKED failed */
 } Machine;
@@ -208,6 +211,8 @@ const Value *val_closure(Machine *m, ValKind kind, const char *name, const Value
 int val_is(const Value *v, Op op);
 const Env *env_push(Machine *m, const Env *env, const Value *value);
 const Value *def_value(Machine *m, uint32_t index);
+/* Start execution with fresh definition values, without proof-only reductions. */
+void runtime_begin(Machine *m);
 const Value *eval_core(Machine *m, const Env *env, const Core *core);
 const Value *apply_value(Machine *m, const Value *fn, const Value *arg);
 /* The body of a LAM, PI or SIGMA value at ARG. */

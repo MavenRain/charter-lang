@@ -63,7 +63,7 @@ EOF
 test "$(build/langc eval "$tmp/sum.lang" output)" = 'inl 7'
 test "$(build/langc eval "$tmp/sum.lang" mapped)" = 'inr true'
 # A truncated normal form must not be reported as successful evaluation.
-printf 'value : Stack\nvalue = fold (λ (s : Stack) → push 0 s) bottom 10000\n' >"$tmp/large.lang"
+printf 'value : FreeMon ℕ\nvalue = fold (λ (s : FreeMon ℕ) → fmCons ℕ 0 s) (fmNil ℕ) 10000\n' >"$tmp/large.lang"
 status=0
 build/langc eval "$tmp/large.lang" value >"$tmp/got" 2>"$tmp/err" || status=$?
 test "$status" = 1

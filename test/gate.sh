@@ -118,7 +118,7 @@ esac
 got=$(build/langc eval test/ir/lazy.lang lazy 3 2>&1) || true
 [ "$got" = "3" ] || { echo "FAIL lazy.lang: want 3, got $got"; fail=$((fail + 1)); }
 build/langc ir test/ir/lazy.lang > /dev/null || { echo "FAIL lazy.lang: ir"; fail=$((fail + 1)); }
-for want in "stackSum 3:15" "stackTrap 0:7" "stackTrap 2:5" "stackDemand 0:trap" "stackDemand 2:trap"; do
+for want in "fmSum 3:15" "fmTrap 0:7" "fmTrap 2:5" "fmDemand 0:trap" "fmDemand 2:trap"; do
   call=${want%%:*}
   got=$(build/langc eval test/ir/spine.lang ${call% *} ${call#* } 2>"$tmp/err") || true
   want_err=""
@@ -129,6 +129,12 @@ for want in "stackSum 3:15" "stackTrap 0:7" "stackTrap 2:5" "stackDemand 0:trap"
   esac
 done
 build/langc ir test/ir/spine.lang > /dev/null || { echo "FAIL spine.lang: ir"; fail=$((fail + 1)); }
+for want in "fmTotal 1:6" "fmCount 4:6"; do
+  call=${want%%:*}
+  got=$(build/langc eval test/ir/freemon.lang ${call% *} ${call#* } 2>&1) || true
+  [ "$got" = "${want#*:}" ] || { echo "FAIL freemon.lang $call: want ${want#*:}, got $got"; fail=$((fail + 1)); }
+done
+{ build/langc ir test/ir/freemon.lang > "$tmp/ir.txt" && rg -q "^func fmCount " "$tmp/ir.txt" && rg -q -F "add(l0, 1)" "$tmp/ir.txt"; } || { echo "FAIL freemon.lang: ir"; fail=$((fail + 1)); }
 status=0
 build/langc check test/ir/tree.lang > /dev/null || status=$?
 [ "$status" -eq 0 ] || { echo "FAIL tree.lang: check exit $status"; fail=$((fail + 1)); }
@@ -138,6 +144,20 @@ case "$status:$first" in
   "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
   *) echo "FAIL tree.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
 esac
+status=0
+build/langc check test/ir/ind.lang > /dev/null || status=$?
+[ "$status" -eq 0 ] || { echo "FAIL ind.lang: check exit $status"; fail=$((fail + 1)); }
+for want in "double 3:6" "bump 2:6"; do
+  call=${want%%:*}
+  got=$(build/langc eval test/ir/ind.lang ${call% *} ${call#* } 2>&1) || true
+  [ "$got" = "${want#*:}" ] || { echo "FAIL ind.lang $call: want ${want#*:}, got $got"; fail=$((fail + 1)); }
+done
+status=0
+first=$(build/langc ir test/ir/ind.lang 2>&1 > /dev/null) || status=$?
+case "$status:$first" in
+  "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
+  *) echo "FAIL ind.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
+esac
 
 # The Wasm target: each module builds and is valid. Then the differential: on
 # the grid of test/grid.awk, node and `langc eval` give the same result for
@@ -145,7 +165,7 @@ esac
 wasms=0
 cases=0
 mismatches=0
-for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap.lang; do
+for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap.lang test/ir/nat-effects.lang; do
   w="$tmp/$(basename "$f" .lang).wasm"
   wasms=$((wasms + 1))
   if ! build/langc build "$f" -o "$w" 2>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
@@ -245,12 +265,20 @@ if ! cmp -s test/json/expect.txt "$tmp/json.txt"; then
   fail=$((fail + 1))
 fi
 # The progress line: typed "k of m" with k < m (a later declaration fails),
-# and an all-pass file.
+# an all-pass file, and laws "k of m" with k < m (a later law fails).
 for want in 'progress-part:{"parsed":"3 of 3","typed":"2 of 3","laws":"0 of 0"}' \
-  'progress-pass:{"parsed":"2 of 2","typed":"2 of 2","laws":"0 of 0"}'; do
+  'progress-pass:{"parsed":"2 of 2","typed":"2 of 2","laws":"0 of 0"}' \
+  'progress-laws:{"parsed":"3 of 3","typed":"2 of 3","laws":"1 of 2"}'; do
   got=$(build/langc check --json "test/json/${want%%:*}.lang" 2>/dev/null | tail -n 1) || true
   [ "$got" = "${want#*:}" ] || { echo "FAIL progress ${want%%:*}: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done
+# The laws count on examples/assets.lang: not zero (the natCMon laws), and
+# all of the laws type-check.
+laws=$(build/langc check --json examples/assets.lang 2>/dev/null | tail -n 1 | rg -o -r '$1' '"laws":"([0-9]+ of [0-9]+)"') || true
+if [ -z "$laws" ] || [ "${laws% of *}" != "${laws#* of }" ] || [ "${laws% of *}" = 0 ]; then
+  echo "FAIL progress assets: want laws \"m of m\" with m > 0, got $laws"
+  fail=$((fail + 1))
+fi
 
 # docs/DIAGNOSTICS.md has one row for each code in src/. Each code has
 # test/json/CODE.lang (its first JSON line has that code), or its row gives

@@ -1,0 +1,12 @@
+-- Proof normalization must preserve overflow effects in executable entries.
+zeroLe : (n : ℕ) → Bool
+zeroLe n = natLe 0 (natAdd n 1)
+
+positive : (n : ℕ) → Bool
+positive n = natLe (natAdd n 1) 0
+
+cancel : (n : ℕ) → ℕ
+cancel n = natSub (natAdd n 1) 1
+
+cancelBoth : (n : ℕ) → (m : ℕ) → Bool
+cancelBoth n m = natLe (natAdd n 1) (natAdd m 1)

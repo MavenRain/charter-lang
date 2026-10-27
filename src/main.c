@@ -240,16 +240,41 @@ static void noncanon(Arena *arena, const char *path, const char *text, size_t le
   }
 }
 
+/* The head of an application: the leftmost term of the spine. */
+static const Term *app_head(const Term *term) {
+  return term->kind == TERM_APP ? app_head(term->left) : term;
+}
+
+/* A law type: under zero or more Pis, an application with the head `Eq`. */
+static int is_law_type(const Term *type) {
+  return type != NULL && (type->kind == TERM_PI ? is_law_type(type->right)
+                                                : type->kind == TERM_APP && app_head(type)->kind == TERM_VAR &&
+                                                      strcmp(app_head(type)->name, "Eq") == 0);
+}
+
+/* The laws in decls[from, to): the defs with a law type. A postulate is not
+   a law. */
+static size_t count_laws(const Decl *decls, size_t from, size_t to) {
+  return from >= to ? 0
+                    : (size_t)(decls[from].kind == DECL_DEF && is_law_type(decls[from].type)) +
+                          count_laws(decls, from + 1, to);
+}
+
 /* The last line of `check --json`. The count is the number of program
    declarations: after a parse failure, the complete ones and the failed
-   one; after a lex failure, 0. */
+   one; after a lex failure, 0. The laws are the program laws (count_laws):
+   all of them when the program is typed, else the laws before the failed
+   declaration. */
 static void print_progress(const Front *front, const Machine *machine, int parsed, int typed, FILE *out) {
   size_t done = front->lexed ? front->decls.count - front->domain_count : 0;
   size_t count = done + (size_t)(front->lexed && !parsed);
   size_t checked = machine->checked > front->domain_count ? machine->checked - front->domain_count : 0;
   size_t ok = typed ? count : parsed ? checked : 0;
-  fprintf(out, "{\"parsed\":\"%zu of %zu\",\"typed\":\"%zu of %zu\",\"laws\":\"0 of 0\"}\n",
-          done, count, ok, count);
+  size_t last = machine->checked < front->decls.count ? machine->checked : front->decls.count;
+  size_t laws = front->lexed ? count_laws(front->decls.items, front->domain_count, front->decls.count) : 0;
+  size_t laws_ok = typed ? laws : parsed ? count_laws(front->decls.items, front->domain_count, last) : 0;
+  fprintf(out, "{\"parsed\":\"%zu of %zu\",\"typed\":\"%zu of %zu\",\"laws\":\"%zu of %zu\"}\n",
+          done, count, ok, count, laws_ok, laws);
 }
 
 /* `check` in both modes: the error (at most one), then the W_NONCANON

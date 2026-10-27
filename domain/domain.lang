@@ -1,13 +1,27 @@
 -- The charter-lang domain (PLAN 3.1). Each data type, constructor, field
 -- and definition name here becomes a core name (rule R4). Only this file
 -- can declare a data type (rule R1).
--- Kit regression subjects, not charter data: `langc ir` walks a Stack
--- spine, and a fold over a Tree that exists at run time is a HOST-LIMIT.
--- FreeMon replaces them at S2 (PLAN 10, O9).
-data Stack : Type where
-  bottom : Stack
-  push : (top : ℕ) → (rest : Stack) → Stack
+-- The free monoid on A (rule R1, second class, Q-S2a-2). `langc ir` walks
+-- a FreeMon ℕ spine (test/ir/spine.lang).
+data FreeMon (A : Type 0) : Type where
+  fmNil : FreeMon A
+  fmCons : (fmHead : A) → (fmTail : FreeMon A) → FreeMon A
 
+fmAppend : (A : Type 0) → (xs : FreeMon A) → (ys : FreeMon A) → FreeMon A
+fmAppend A xs ys = fold ys (λ (h : A) (acc : FreeMon A) → fmCons A h acc) xs
+
+-- The monoid laws of fmAppend with the unit fmNil A.
+fmUnitL : (A : Type 0) → (ys : FreeMon A) → Eq (FreeMon A) (fmAppend A (fmNil A) ys) ys
+fmUnitL A ys = refl
+
+fmUnitR : (A : Type 0) → (xs : FreeMon A) → Eq (FreeMon A) (fmAppend A xs (fmNil A)) xs
+fmUnitR A xs = ind (λ (x : FreeMon A) → Eq (FreeMon A) (fmAppend A x (fmNil A)) x) refl (λ (h : A) (t : FreeMon A) (ih : Eq (FreeMon A) (fmAppend A t (fmNil A)) t) → cong (λ (y : FreeMon A) → fmCons A h y) ih) xs
+
+fmAssoc : (A : Type 0) → (xs : FreeMon A) → (ys : FreeMon A) → (zs : FreeMon A) → Eq (FreeMon A) (fmAppend A (fmAppend A xs ys) zs) (fmAppend A xs (fmAppend A ys zs))
+fmAssoc A xs ys zs = ind (λ (x : FreeMon A) → Eq (FreeMon A) (fmAppend A (fmAppend A x ys) zs) (fmAppend A x (fmAppend A ys zs))) refl (λ (h : A) (t : FreeMon A) (ih : Eq (FreeMon A) (fmAppend A (fmAppend A t ys) zs) (fmAppend A t (fmAppend A ys zs))) → cong (λ (y : FreeMon A) → fmCons A h y) ih) xs
+
+-- Kit regression subject, not charter data: a fold over a Tree that exists
+-- at run time is a HOST-LIMIT (test/ir/tree.lang; Q-S2a-1 (a)).
 data Tree : Type where
   tip : Tree
   fork : (forkLeft : Tree) → (forkRight : Tree) → Tree

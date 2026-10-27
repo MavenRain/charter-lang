@@ -664,6 +664,8 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_MAP:
   case OP_BIND:
   case OP_FOLD_NAT:
+  case OP_IND_NAT:
+  case OP_IND_FAMILY:
   case OP_FOLD_LIST:
   case OP_FOLD_FAMILY:
   case OP_UNFOLD:
@@ -1215,6 +1217,9 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
     return v->inst == CARRIER_OPTION ? carrier_filter(l, b, v, out) : not_option(l, b, v, out);
   case OP_FOLD_NAT:
     return fold_nat(l, b, v, out);
+  case OP_IND_NAT:
+  case OP_IND_FAMILY:
+    return diag_fail(l->m->diag, "REFUSE_RUNTIME_TREE", l->m->def, "an ind over a run-time Nat or domain value is not in the Wasm host (HOST-LIMIT): ind is for proofs");
   case OP_FOLD_LIST:
     return fold_list(l, b, v, out);
   case OP_UNFOLD:
@@ -1328,6 +1333,7 @@ int lower_program(Machine *m, IrProgram *prog) {
   size_t n = 0;
   uint32_t i;
   int entry;
+  runtime_begin(m);
   prog->funcs = funcs;
   prog->func_count = 0;
   if (funcs == NULL)

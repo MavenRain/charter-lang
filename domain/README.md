@@ -51,7 +51,7 @@ time (`REFUSE_RUNTIME_TREE`, see `docs/host/CAPABILITY.md`).
 
 | Data type | Kind | Use |
 |---|---|---|
-| `Stack` | one recursive field, `rest` | kit regression subject: the spine loop in `test/ir/spine.lang`, `pileDepth` in `examples/base.lang` |
+| `FreeMon A` | free monoid (rule R1, second class): `fmNil`, `fmCons` with `fmHead` and the recursive field `fmTail` | `fmAppend` and its monoid laws `fmUnitL`, `fmUnitR`, `fmAssoc`; kit regression subject: the spine loop in `test/ir/spine.lang`, `pileDepth` in `examples/base.lang` |
 | `Tree` | two recursive fields | kit regression subject: the tree mutant `test/ir/tree.lang` |
 | `DecE` | enum: `decRelease`, `decRefund`, `decHold` | escrow decisions and escrow ballots (PLAN 3.1) |
 | `BallotA` | enum: `ballotAdopt`, `ballotReject` | amendment ballots |
@@ -71,7 +71,7 @@ over `(M : CMon)` as iterated Sigma, with the projections
 `data Tree` exists only for the tree mutant. The mutant checks that the
 lowering refuses a fold over a run-time tree. Rule R1 lets only this file
 declare a data type, so the data type must be here. FreeMon replaces
-`Stack` and `Tree` at S2 (PLAN 10, O9).
+`Stack` at S2a; `Tree` stays (PLAN 10, O9, Q-S2a-1).
 
 ## How to replace the domain
 

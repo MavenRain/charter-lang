@@ -28,3 +28,6 @@ universes Endo => (A : Type 0) -> (x : A) -> A
 monad okBind => inl false
 functions four => 4
 functions applied => 36
+assets natLeq 2 3 => 1
+assets natLeq 3 2 => 0
+assets natDouble 7 => 14

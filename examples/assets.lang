@@ -1,5 +1,5 @@
 -- The assets A as a Pi parameter (M : CMon) (Q2, Q8). S1 declares no
--- instance of CMon (PLAN 10, O8), so these functions are checked only.
+-- instance of CMon. natCMon at the end of this file is the CMon on ℕ (S2a, O8).
 bitScale : (M : CMon) → (b : Bit) → (a : cmCarrier M) → cmCarrier M
 bitScale M b a = fold (cmZero M) a b
 
@@ -23,3 +23,51 @@ payClaim M c index = pay M (claimPayee M c) (claimAmount M c) index
 
 paidAmount : (M : CMon) → (c : Claim M) → (index : ℕ) → Eq (cmCarrier M) (voucherAmount M (payClaim M c index)) (claimAmount M c)
 paidAmount M c index = refl
+
+-- natCMon: the CMon on ℕ with natAdd and 0 (S2a, O8). Each law is a def
+-- with an Eq type, proved by ind. natMonus b a is some (natSub b a) when
+-- natLe a b, else none.
+natSuccL : (k : ℕ) → (a : ℕ) → Eq ℕ (natAdd (natAdd k 1) a) (natAdd (natAdd k a) 1)
+natSuccL k a = ind (λ (n : ℕ) → Eq ℕ (natAdd (natAdd k 1) n) (natAdd (natAdd k n) 1)) refl (λ (m : ℕ) (ih : Eq ℕ (natAdd (natAdd k 1) m) (natAdd (natAdd k m) 1)) → cong (λ (x : ℕ) → natAdd x 1) ih) a
+
+natAssoc : (a : ℕ) → (b : ℕ) → (c : ℕ) → Eq ℕ (natAdd (natAdd a b) c) (natAdd a (natAdd b c))
+natAssoc a b c = ind (λ (n : ℕ) → Eq ℕ (natAdd (natAdd a b) n) (natAdd a (natAdd b n))) refl (λ (m : ℕ) (ih : Eq ℕ (natAdd (natAdd a b) m) (natAdd a (natAdd b m))) → cong (λ (x : ℕ) → natAdd x 1) ih) c
+
+natUnitL : (a : ℕ) → Eq ℕ (natAdd 0 a) a
+natUnitL a = ind (λ (n : ℕ) → Eq ℕ (natAdd 0 n) n) refl (λ (k : ℕ) (ih : Eq ℕ (natAdd 0 k) k) → cong (λ (x : ℕ) → natAdd x 1) ih) a
+
+natUnitR : (a : ℕ) → Eq ℕ (natAdd a 0) a
+natUnitR a = refl
+
+natComm : (a : ℕ) → (b : ℕ) → Eq ℕ (natAdd a b) (natAdd b a)
+natComm a b = ind (λ (n : ℕ) → Eq ℕ (natAdd a n) (natAdd n a)) (symm (natUnitL a)) (λ (m : ℕ) (ih : Eq ℕ (natAdd a m) (natAdd m a)) → trans (cong (λ (x : ℕ) → natAdd x 1) ih) (symm (natSuccL m a))) b
+
+natCancel : (a : ℕ) → (b : ℕ) → (c : ℕ) → (e : Eq ℕ (natAdd a c) (natAdd b c)) → Eq ℕ a b
+natCancel a b c e = ind (λ (n : ℕ) → (f : Eq ℕ (natAdd a n) (natAdd b n)) → Eq ℕ a b) (λ (f : Eq ℕ a b) → f) (λ (k : ℕ) (ih : (f : Eq ℕ (natAdd a k) (natAdd b k)) → Eq ℕ a b) (f : Eq ℕ (natAdd a (natAdd k 1)) (natAdd b (natAdd k 1))) → ih (cong (λ (x : ℕ) → ind (λ (m : ℕ) → ℕ) 0 (λ (j : ℕ) (r : ℕ) → j) x) f)) c e
+
+natMonus : (x : ℕ) → (y : ℕ) → Option ℕ
+natMonus x y = flagIf (natLe y x) (some (natSub x y)) none
+
+natLeAdd : (a : ℕ) → (d : ℕ) → Eq Bool (natLe a (natAdd a d)) true
+natLeAdd a d = ind (λ (n : ℕ) → Eq Bool (natLe n (natAdd n d)) true) refl (λ (k : ℕ) (ih : Eq Bool (natLe k (natAdd k d)) true) → transport (λ (x : ℕ) → Eq Bool (natLe (natAdd k 1) x) true) (symm (natSuccL k d)) ih) a
+
+natSubAdd : (a : ℕ) → (d : ℕ) → Eq ℕ (natSub (natAdd a d) a) d
+natSubAdd a d = ind (λ (n : ℕ) → Eq ℕ (natSub (natAdd n d) n) d) (natUnitL d) (λ (k : ℕ) (ih : Eq ℕ (natSub (natAdd k d) k) d) → transport (λ (x : ℕ) → Eq ℕ (natSub x (natAdd k 1)) d) (symm (natSuccL k d)) ih) a
+
+natMonusComplete : (a : ℕ) → (d : ℕ) → Eq (Option ℕ) (natMonus (natAdd a d) a) (some d)
+natMonusComplete a d = transport (λ (f : Bool) → Eq (Option ℕ) (flagIf f (some (natSub (natAdd a d) a)) none) (some d)) (symm (natLeAdd a d)) (cong (λ (x : ℕ) → some x) (natSubAdd a d))
+
+natAbsurd : (T : Type 0) → (e : Eq ℕ 0 1) → T
+natAbsurd T e = transport (λ (n : ℕ) → ind (λ (m : ℕ) → Type 0) Unit (λ (j : ℕ) (r : Type 0) → T) n) e unit
+
+natMonusSound : (a : ℕ) → (b : ℕ) → (d : ℕ) → (e : Eq (Option ℕ) (natMonus b a) (some d)) → Eq ℕ (natAdd a d) b
+natMonusSound a b d e = ind (λ (n : ℕ) → (b1 : ℕ) → (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus b1 n) (some d1)) → Eq ℕ (natAdd n d1) b1) (λ (b1 : ℕ) (d1 : ℕ) (e1 : Eq (Option ℕ) (natMonus b1 0) (some d1)) → trans (natUnitL d1) (symm (cong (λ (o : Option ℕ) → option 0 (λ (x : ℕ) → x) o) e1))) (λ (k : ℕ) (ih : (b1 : ℕ) → (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus b1 k) (some d1)) → Eq ℕ (natAdd k d1) b1) (b1 : ℕ) → ind (λ (m : ℕ) → (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus m (natAdd k 1)) (some d1)) → Eq ℕ (natAdd (natAdd k 1) d1) m) (λ (d1 : ℕ) (e1 : Eq (Option ℕ) (natMonus 0 (natAdd k 1)) (some d1)) → natAbsurd (Eq ℕ (natAdd (natAdd k 1) d1) 0) (cong (λ (o : Option ℕ) → option 0 (λ (x : ℕ) → 1) o) e1)) (λ (j : ℕ) (ihb : (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus j (natAdd k 1)) (some d1)) → Eq ℕ (natAdd (natAdd k 1) d1) j) (d1 : ℕ) (e1 : Eq (Option ℕ) (natMonus (natAdd j 1) (natAdd k 1)) (some d1)) → trans (natSuccL k d1) (cong (λ (x : ℕ) → natAdd x 1) (ih j d1 e1))) b1) a b d e
+
+natCMon : CMon
+natCMon = pack ℕ (pack (λ (x : ℕ) (y : ℕ) → natAdd x y) (pack 0 (pack natAssoc (pack natUnitL (pack natUnitR (pack natComm (pack natCancel (pack natMonus (pack natMonusSound natMonusComplete)))))))))
+
+natLeq : (a : ℕ) → (b : ℕ) → Bool
+natLeq a b = le natCMon a b
+
+natDouble : (a : ℕ) → ℕ
+natDouble a = double natCMon a
