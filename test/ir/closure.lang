@@ -1,3 +1,4 @@
 -- The check accepts this program, but the fold gives a function value at
 -- run time. `langc ir` must refuse it with REFUSE_RUNTIME_CLOSURE.
-def bad : (n : Nat) -> Nat := fun (n : Nat) => (fold (fun (g : (x : Nat) -> Nat) => fun (x : Nat) => g (natAdd x 1)) (fun (x : Nat) => x) n) 0
+bad : (n : ℕ) → ℕ
+bad n = fold (λ (g : (x : ℕ) → ℕ) (x : ℕ) → g (natAdd x 1)) (λ (x : ℕ) → x) n 0

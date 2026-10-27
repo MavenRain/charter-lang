@@ -7,12 +7,12 @@
 
 #define ENTRY_PARAMS_MAX 16u
 
-/* An entry: a program definition of type Nat, Flag, or a function of Nat and
-   Flag arguments to a Nat or Flag result. */
+/* An entry: a program definition of type Nat, Bool, or a function of Nat and
+   Bool arguments to a Nat or Bool result. */
 typedef struct {
   uint32_t param_count;
-  int param_flag[ENTRY_PARAMS_MAX];
-  int result_flag;
+  int param_bool[ENTRY_PARAMS_MAX];
+  int result_bool;
 } Entry;
 
 /* Checks the domain declarations, then the program, into M. Returns 1, or 0

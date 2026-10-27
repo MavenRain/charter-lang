@@ -7,15 +7,18 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S0)
+## Status (S1)
 
-Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential) on
-the kit sample domain. No charter-lang domain code is built.
+Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
+the leaf-lang surface; `langc fmt` with one canonical form per operation;
+`langc check --json` with fix hints and the counts parsed and typed; the
+R1 refusals `REFUSE_CELL` and `REFUSE_DATA`; the base data of
+`domain/domain.lang` (`DecE`, `BallotA`, `DecA`, `Bit`, `Address`, `CMon`,
+`Voucher M`, `Claim M`). The escrow operations and the laws are not built.
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
-- `langc fmt` and one canonical form per operation (S1).
-- `langc check --json` with fix hints and the counts parsed, typed and
-  laws discharged (S1; the law count at S2).
+- the count of laws discharged in `langc check --json` (S2; the progress
+  line gives `0 of 0` now).
 - `skills/charter-lang/SKILL.md` with 3 to 5 graded examples (S9).
 - `langc mcp`, an MCP server in C that tcc builds (S9).
 - `docs/TOKEN-BASELINE.md`, token counts against Python and Rust (S9).
@@ -24,6 +27,9 @@ Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
 
 - `make check`: build `build/langc` with tcc and run the gate.
 - `build/langc check PROG`: check a program.
+- `build/langc check --json PROG`: the same check, with JSON diagnostics
+  and a progress line.
+- `build/langc fmt PROG`: print the canonical text of the program.
 - `build/langc eval PROG NAME [ARGS...]`: print the normal form of `NAME`.
 - `build/langc ir PROG` and `build/langc abi PROG`: print the IR and the
   entry names.

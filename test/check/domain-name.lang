@@ -1,1 +1,2 @@
-def total : Nat := 1
+cmZero : ℕ
+cmZero = 1

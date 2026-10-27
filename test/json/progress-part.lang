@@ -1,0 +1,9 @@
+-- typed is 2 of 3: the third declaration does not type-check.
+one : ℕ
+one = 1
+
+two : ℕ
+two = natAdd one one
+
+bad : ℕ
+bad = true

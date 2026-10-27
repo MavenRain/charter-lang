@@ -1,1 +1,2 @@
-def u : Type 1 := Type
+u : Type 1
+u = Type

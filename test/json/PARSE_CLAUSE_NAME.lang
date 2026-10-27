@@ -1,0 +1,3 @@
+-- The clause name must be the signature name.
+total : ℕ
+count = 3

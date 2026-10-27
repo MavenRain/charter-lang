@@ -19,7 +19,7 @@
 /* The core names: type formers, constructors and operations. */
 typedef enum {
   OP_NAT,
-  OP_FLAG,
+  OP_BOOL,
   OP_UNIT,
   OP_PROD,
   OP_SUM,
@@ -28,8 +28,8 @@ typedef enum {
   OP_EQ,
   OP_FAMILY,
   OP_UNIT_VAL,
-  OP_FLAG_YES,
-  OP_FLAG_NO,
+  OP_TRUE,
+  OP_FALSE,
   OP_PAIR,
   OP_INL,
   OP_INR,
@@ -191,6 +191,8 @@ typedef struct {
   unsigned depth;
   uint64_t fuel;
   int overflowed;
+  size_t checked;  /* check_program: the declarations before the current one */
+  int decl_failed; /* check_program: 1 when declaration CHECKED failed */
 } Machine;
 
 /* Each function returns NULL (or 0) after a diagnostic. A NULL input gives a

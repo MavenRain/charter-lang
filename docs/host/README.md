@@ -52,37 +52,45 @@ The build and the gate need no network access.
 
 ## Source language
 
-A program is a sequence of `def NAME : TYPE := TERM`. A line comment
-starts with `--`. Lambdas are `fun (x : A) => t`. There is no text type.
+A program is a sequence of declarations in the Agda-like surface of
+`SPEC.md` section 2. A definition is a signature line and a clause line,
+for example `twice : (f : ℕ → ℕ) → ℕ → ℕ` and `twice f x = f (f x)`. A
+line comment starts with `--`. Lambdas are `λ x → t` or `λ (x : A) → t`.
+The parser also reads the ASCII aliases of `SPEC.md` section 2.3: `->`,
+`\`, `fun x => t`, `*`, `Sigma (x : A) B` and `Nat`. There is no text type.
 
-Core names: types `Nat Flag Prod Sum Option List Eq`, values
-`flagYes flagNo pair first second inl inr either none some option nil cons
-pure map bind fold unfold filter pack witness payload refl symm trans
+Core names (`BUILTINS` in `src/front/check.c`): types `ℕ` (core name
+`Nat`), `Bool Unit Sum Option Eq`, values `unit true false inl inr either
+none some option pack witness payload pure map bind fold refl symm trans
 transport cong`, Nat operations `natAdd natSub natMul natEq natLe`, and the
-Flag eliminator `flagIf b yes no`. `Type 0 : Type 1` is the universe
-chain. `Sigma (x : A) B` and `(x : A) * B` are dependent pairs.
-`FORMERS.md` gives the status of each former.
+Bool eliminator `flagIf b yes no`. `Type 0 : Type 1` is the universe chain.
+`(x : A) × B` is a dependent pair and `A × B` is a pair. `pack a b` makes
+a pair, and `witness` and `payload` give its parts. `formers/tcc-wasm.md`
+gives the status of each former.
 
 The compiler enforces these rules:
 
 | Rule | Code | The compiler refuses |
 |---|---|---|
-| R1 | `REFUSE_DATA` | a `family` declaration in a program |
-| R2 | `REFUSE_AXIOM` | an `axiom` declaration |
-| R3 | `REFUSE_REC` | `def rec`, or a definition that refers to itself or to a later definition |
+| R1 | `REFUSE_DATA` | a `data` declaration in a program |
+| R2 | `REFUSE_AXIOM` | a `postulate` declaration |
+| R3 | `REFUSE_REC` | `rec`, or a definition that refers to itself or to a later definition |
 | R4 | `REFUSE_NAME` | a core name, a domain name, a reserved name or a repeated name as a new definition |
 
 ## CLI
 
 ```sh
-build/langc check PROG
+build/langc check [--json] PROG
 build/langc eval PROG NAME [ARGS...]
 build/langc ir PROG
 build/langc abi PROG
 build/langc build PROG -o OUT [--runtime]
+build/langc fmt PROG
 ```
 
-- `check` prints `ok`, or refuses the program.
+- `check` prints `ok`, or refuses the program. `check --json` gives the
+  diagnostics as JSON. `docs/DIAGNOSTICS.md` lists the codes.
+- `fmt` prints the canonical text of the program (`SPEC.md` section 2.6).
 - `eval` prints the normal form of `NAME`. Each argument is a decimal
   number. When an entry traps, `eval` prints `trap` on stdout and an
   `EVAL_OVERFLOW` line on stderr, and the exit status is 0.
@@ -97,22 +105,22 @@ usage or IO error. A diagnostic on stderr has the form
 
 ## Entries
 
-An entry is a top-level program definition whose declared type is `Nat`,
-`Flag`, or a first-order function from `Nat` and `Flag` arguments to a
-`Nat` or `Flag` result. `build` exports each entry by its name. Each
+An entry is a top-level program definition whose declared type is `ℕ`,
+`Bool`, or a first-order function from `ℕ` and `Bool` arguments to a
+`ℕ` or `Bool` result. `build` exports each entry by its name. Each
 parameter and the result is an `i64`. Other definitions are not exported.
 
-`Nat` is an unsigned 64-bit integer. `natAdd` and `natMul` trap on an
-overflow past 2^64 - 1. `natSub` stops at 0. `Flag` is 0 or 1.
+`ℕ` is an unsigned 64-bit integer. `natAdd` and `natMul` trap on an
+overflow past 2^64 - 1. `natSub` stops at 0. `Bool` is 0 or 1.
 
 ## Compilation
 
 Compilation is partial evaluation. The compiler normalizes the body of
 each entry with the parameters as free variables. Types and universes erase.
 Proof contents erase, while their trap flags remain. A lambda stays only as the direct function argument of
-`fold`, `unfold`, `map`, `bind`, `filter`, `either` or `option`. The
+`fold`, `map`, `bind`, `either` or `option`. The
 lowering puts its body into a loop or a branch. The lowering refuses two
-programs with a HOST-LIMIT code (see `docs/CAPABILITY.md`):
+programs with a HOST-LIMIT code (see `docs/host/CAPABILITY.md`):
 
 - `REFUSE_RUNTIME_CLOSURE`: a function value must exist at run time.
 - `REFUSE_RUNTIME_TREE`: a fold walks a tree that exists only at run time.
@@ -130,7 +138,7 @@ block use the same result, but the two arms of a branch do not share
 results.
 
 Strict traps are not correct here. Normalization at compile time drops
-terms that are not read, for example `first (pair a b)` gives `a`. The
+terms that are not read, for example `witness (pack a b)` gives `a`. The
 evaluator also computes both arms of `flagIf`. A strict trap would fire
 in a term that the program does not use.
 
@@ -146,48 +154,49 @@ repository owner has not ruled on it.
   `memory.grow`. When the memory cannot grow past 1 GiB, it traps.
 - Function 1 + K is entry K. Each entry first sets the heap pointer to 0,
   so each call starts with an empty heap.
-- An entry traps when a `Flag` argument is larger than 1.
+- An entry traps when a `Bool` argument is larger than 1.
 - A word is 8 bytes. A heap block holds the tag in word 0, the word of
   field K in word 1 + 2K and the trap flag of field K in word 2 + 2K.
 - A tag switch is nested blocks and `br_table`. A tag out of range traps.
 
 ## Domain slot
 
-`domain/domain.lang` holds the families and the operations of the domain.
-Only this file can declare a `family` (rule R1). `domain/README.md` tells
-how to replace the sample domain.
+`domain/domain.lang` holds the data types and the operations of the
+domain. Only this file can declare a data type (rule R1). `domain/README.md` tells
+how the domain is organized.
 
 ## Gate
 
-`make -C hosts/tcc-wasm check` prints these lines when it is GREEN:
+`make check` prints these lines when it is GREEN:
 
 | Line | What the gate does |
 |---|---|
-| `examples: 10 checked, 0 failed` | `langc check` accepts each `examples/*.lang` file |
+| `examples: 11 checked, 0 failed` | `langc check` accepts each `examples/*.lang` file |
 | `parse refusals: 9 checked` | each `test/parse` file fails with the code in `test/parse/expect.txt`; one file has 1100 nested parentheses |
-| `check refusals: 19 checked` | each `test/check` mutant fails with the code in `test/check/expect.txt`; the `TYPE_REFL` message shows both normal forms |
-| `evals: 32 checked` | `langc eval` gives each result in `test/eval/expect.txt` |
-| `ir: 10 lowered` | `langc ir` lowers each example, with one `func` for each `abi` line |
-| `wasm: 13 modules valid` | `langc build` writes a module for each example and for `test/ir/spine.lang`, `test/ir/lazy.lang` and `test/ir/proof-trap.lang`; `wasm-validate` and `wasm-objdump -x` accept it |
-| `differential: 813 cases, 0 mismatches` | node runs each entry on the grid of `test/grid.awk`; each result is equal to the `langc eval` result, and a trap is equal to a trap |
+| `check refusals: 18 checked` | each `test/check` mutant fails with the code in `test/check/expect.txt`; the `TYPE_REFL` message shows both normal forms |
+| `evals: 30 checked` | `langc eval` gives each result in `test/eval/expect.txt` |
+| `ir: 11 lowered` | `langc ir` lowers each example, with one `func` for each `abi` line |
+| `wasm: 14 modules valid` | `langc build` writes a module for each example and for `test/ir/spine.lang`, `test/ir/lazy.lang` and `test/ir/proof-trap.lang`; `wasm-validate` and `wasm-objdump -x` accept it |
+| `differential: 770 cases, 0 mismatches` | node runs each entry on the grid of `test/grid.awk`; each result is equal to the `langc eval` result, and a trap is equal to a trap |
+| `fmt: 51 canonical, 3 non-canonical pairs` | `langc fmt` keeps each committed `.lang` file and each canonical `test/fmt` file the same; it is idempotent, and its output parses to the same terms; each non-canonical `test/fmt` input gives its expected canonical text |
+| `json: 20 fixtures; diagnostics: 32 codes, 18 with a fixture, 14 with no fixture` | each `test/json` fixture gives the JSON shape of its code; each fixture code is in `docs/DIAGNOSTICS.md` |
 | `gate: 0 failures` | the sum of all failures |
 
 The gate also checks the usage and IO exit codes, five `eval` refusals,
 `test/ir/closure.lang` (`REFUSE_RUNTIME_CLOSURE`), `test/ir/tree.lang`
-(`REFUSE_RUNTIME_TREE`), the 13 cases of `test/ir/spine.lang`,
-`pick 2 4 9` = `trap` on Wasm, and the absence of em-dashes and en-dashes
-in the kit. `perl bin/doc-check.pl hosts/tcc-wasm` must report 0
-problems.
+(`REFUSE_RUNTIME_TREE`), the 5 cases of `test/ir/spine.lang`,
+`pick 2 4 9` = `trap` on Wasm, and the absence of em-dashes and en-dashes.
+Then `make check` runs `test/review.sh` and the domain regressions of
+`build/fronttool`, followed by the warning fix regressions of
+`build/checktool`.
 
 ## Known limits
 
-- A `fold` over a bare `nil` cannot infer its type (`TYPE_INFER`). Use a
-  definition with a declared `List` type.
 - With no expected type, `either`, `map` and `cong` take the result type
   of the function at a fresh variable. A dependent result needs a
   declared type.
-- A definition with a `List`, `Prod` or other non-scalar result is not an
-  entry. `ir` and `abi` skip it.
+- A definition with a pair, `Sum`, `Option` or other non-scalar result is
+  not an entry. `ir` and `abi` skip it.
 - `langc eval` stops after 20000000 steps (`EVAL_FUEL`). The Wasm module
   has no step limit, so a large loop count can run on Wasm and stop in
   `eval`. The grid uses large values only for entries with no loop.

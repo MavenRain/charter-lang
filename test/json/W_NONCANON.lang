@@ -1,0 +1,3 @@
+-- ASCII aliases parse; check gives W_NONCANON with the canonical text as fix.
+keep : Nat -> Nat
+keep = fun n => n

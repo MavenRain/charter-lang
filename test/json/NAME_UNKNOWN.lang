@@ -1,0 +1,3 @@
+-- A dropped kit name gets a fix that names the replacement.
+choice : Flag
+choice = true

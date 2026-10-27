@@ -4,8 +4,10 @@
 #include <string.h>
 
 #include "front/check.h"
+#include "front/fmt.h"
 #include "front/front.h"
 #include "front/lower.h"
+#include "front/parser.h"
 #include "target.h"
 
 #define ARENA_LIMIT_BYTES ((size_t)1 << 30)
@@ -15,7 +17,8 @@ typedef enum {
   CMD_EVAL,
   CMD_IR,
   CMD_ABI,
-  CMD_BUILD
+  CMD_BUILD,
+  CMD_FMT
 } Command;
 
 typedef struct {
@@ -26,6 +29,7 @@ typedef struct {
   int arg_count;
   const char *out_path;
   int runtime;
+  int json;
 } Options;
 
 static const struct {
@@ -37,14 +41,16 @@ static const struct {
   {"ir", CMD_IR},
   {"abi", CMD_ABI},
   {"build", CMD_BUILD},
+  {"fmt", CMD_FMT},
 };
 
 static int usage(FILE *err) {
-  fputs("usage: langc check PROG\n"
+  fputs("usage: langc check [--json] PROG\n"
         "       langc eval PROG NAME [ARGS...]\n"
         "       langc ir PROG\n"
         "       langc abi PROG\n"
-        "       langc build PROG -o OUT [--runtime]\n", err);
+        "       langc build PROG -o OUT [--runtime]\n"
+        "       langc fmt PROG\n", err);
   return 2;
 }
 
@@ -75,12 +81,15 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
   if (argc < 3 || !find_command(argv[1], &opt->command)) {
     return diag_fail(diag, "USAGE", NULL, "expected a command and a program path");
   }
-  opt->prog_path = argv[2];
+  opt->json = opt->command == CMD_CHECK && strcmp(argv[2], "--json") == 0;
+  opt->prog_path = argv[2 + opt->json];
   switch (opt->command) {
     case CMD_CHECK:
     case CMD_IR:
     case CMD_ABI:
-      return argc == 3 ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
+    case CMD_FMT:
+      if (opt->json && argc == 3) return diag_fail(diag, "USAGE", NULL, "check --json needs a program path");
+      return argc == 3 + opt->json ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
     case CMD_EVAL:
       if (argc < 4) return diag_fail(diag, "USAGE", NULL, "eval needs a definition name");
       opt->entry = argv[3];
@@ -125,6 +134,7 @@ static int run_target(const Options *opt, Machine *machine, Diag *diag) {
     case CMD_CHECK:
     case CMD_EVAL:
     case CMD_BUILD:
+    case CMD_FMT:
       break;
   }
   out = fopen(opt->out_path, "wb");
@@ -137,22 +147,160 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
   char *text = NULL;
   size_t len = 0;
   if (!read_source(arena, opt->prog_path, &text, &len, diag)) return 2;
-  DeclList decls;
-  if (!front_load(arena, opt->prog_path, text, len, &decls, diag)) return 1;
+  Front front;
+  if (!front_load(arena, opt->prog_path, text, len, &front, diag)) return 1;
   Machine machine;
-  if (!check_program(arena, &decls, &machine, diag)) return 1;
+  if (!check_program(arena, &front.decls, &machine, diag)) return 1;
   switch (opt->command) {
-    case CMD_CHECK:
-      puts("ok");
-      return 0;
     case CMD_EVAL:
       return eval_command(&machine, opt->entry, opt->args, opt->arg_count, stdout, stderr);
+    case CMD_CHECK: /* run_check does check */
     case CMD_IR:
     case CMD_ABI:
     case CMD_BUILD:
+    case CMD_FMT: /* run_fmt does fmt */
       break;
   }
   return run_target(opt, &machine, diag);
+}
+
+/* The span of declaration D. A domain declaration is in domain/domain.lang. */
+static Span decl_span(const char *path, const Decl *d) {
+  Span span = {d->origin == ORIGIN_DOMAIN ? "domain/domain.lang" : path, d->line, d->col, d->end_line, d->end_col};
+  return span;
+}
+
+/* The offset after COUNT more newlines from AT, or LEN. */
+static size_t skip_lines(const char *text, size_t len, size_t at, int count) {
+  size_t pos = at;
+  for (int n = 0; n < count && pos < len; pos++) n += text[pos] == '\n';
+  return pos;
+}
+
+static int count_newlines(const char *text, size_t len) {
+  int n = 0;
+  for (size_t i = 0; i < len; i++) n += text[i] == '\n';
+  return n;
+}
+
+/* Records W_NONCANON in WARN for the region of lines FIRST to LAST of
+   declaration D (NULL for the tail). FOUND is the input text of the region,
+   FIX its canonical text. */
+static void warn_region(Arena *arena, const char *path, const Decl *d, int first, int last, const char *found,
+                        size_t found_len, const char *fix, size_t fix_len, Diag *warn) {
+  Span span = {path, first, 1, first, 1};
+  for (size_t i = 0; i < found_len; i++) {
+    unsigned char byte = (unsigned char)found[i];
+    if (byte == '\n') {
+      span.end_line++;
+      span.end_col = 1;
+    } else if ((byte & 0xC0u) != 0x80u) {
+      span.end_col++;
+    }
+  }
+  diag_fail_at(warn, "W_NONCANON", d != NULL ? d->name : NULL, span, NULL, NULL, NULL,
+               "%s:%d:%d: lines %d to %d are not canonical; replace them with the fix text (the langc fmt output)",
+               path, span.line, span.col, first, last);
+  const char *found_copy = arena_strndup(arena, found, found_len);
+  const char *fix_copy = fix_len == 0 ? "" : arena_strndup(arena, fix, fix_len);
+  diag_attach(warn, fix_copy, found_copy, fix_copy);
+}
+
+/* Records one W_NONCANON in WARN for the first program region that differs
+   from its canonical text (HANDOFF decision 3): region I runs from the line
+   after declaration I-1 to the end of the last line of declaration I. The
+   text after the last declaration is one more region (the tail). */
+static void noncanon(Arena *arena, const char *path, const char *text, size_t len, const Front *front, Diag *warn) {
+  const Decl *decls = front->decls.items + front->domain_count;
+  size_t count = front->decls.count - front->domain_count;
+  FmtText canon;
+  size_t next_comment = 0;
+  size_t pos = 0;
+  int prev_line = 0;
+  fmt_text_init(&canon, arena);
+  for (size_t i = 0; i <= count && !warn->set && !canon.oom; i++) {
+    int tail = i == count;
+    size_t before = canon.len;
+    size_t end = tail ? len : skip_lines(text, len, pos, decls[i].end_line - prev_line);
+    if (tail) {
+      fmt_tail(&canon, count, &front->toks, next_comment);
+    } else {
+      fmt_region(&canon, decls, i, &front->toks, &next_comment);
+    }
+    size_t fix_len = canon.len - before;
+    int same = fix_len == end - pos && (fix_len == 0 || memcmp(canon.data + before, text + pos, fix_len) == 0);
+    int lines = count_newlines(text + pos, end - pos);
+    int last = tail ? prev_line + (lines > 0 ? lines : 1) : decls[i].end_line;
+    if (!same && !canon.oom) {
+      warn_region(arena, path, tail ? NULL : &decls[i], prev_line + 1, last, text + pos, end - pos, canon.data + before,
+                  fix_len, warn);
+    }
+    prev_line = last;
+    pos = end;
+  }
+}
+
+/* The last line of `check --json`. The count is the number of program
+   declarations: after a parse failure, the complete ones and the failed
+   one; after a lex failure, 0. */
+static void print_progress(const Front *front, const Machine *machine, int parsed, int typed, FILE *out) {
+  size_t done = front->lexed ? front->decls.count - front->domain_count : 0;
+  size_t count = done + (size_t)(front->lexed && !parsed);
+  size_t checked = machine->checked > front->domain_count ? machine->checked - front->domain_count : 0;
+  size_t ok = typed ? count : parsed ? checked : 0;
+  fprintf(out, "{\"parsed\":\"%zu of %zu\",\"typed\":\"%zu of %zu\",\"laws\":\"0 of 0\"}\n",
+          done, count, ok, count);
+}
+
+/* `check` in both modes: the error (at most one), then the W_NONCANON
+   warning (at most one), then `ok` (text) or the progress line (JSON). A
+   warning does not change the exit code. */
+static int run_check(const Options *opt, Arena *arena, Diag *diag) {
+  char *text = NULL;
+  size_t len = 0;
+  Front front;
+  Machine machine;
+  Diag warn;
+  memset(&front, 0, sizeof front);
+  memset(&machine, 0, sizeof machine);
+  diag_init(&warn);
+  int loaded = read_source(arena, opt->prog_path, &text, &len, diag);
+  int parsed = loaded && front_load(arena, opt->prog_path, text, len, &front, diag);
+  int typed = parsed && check_program(arena, &front.decls, &machine, diag);
+  if (parsed && !typed && machine.decl_failed) {
+    diag_default_span(diag, decl_span(opt->prog_path, &front.decls.items[machine.checked]));
+  }
+  if (parsed) noncanon(arena, opt->prog_path, text, len, &front, &warn);
+  if (opt->json) {
+    if (diag->set) diag_print_json(diag, stdout);
+    if (warn.set) diag_print_json(&warn, stdout);
+    print_progress(&front, &machine, parsed, typed, stdout);
+  } else {
+    if (diag->set) diag_print(diag, stderr);
+    if (warn.set) diag_print(&warn, stderr);
+    if (typed) puts("ok");
+  }
+  return typed ? 0 : loaded ? 1 : 2;
+}
+
+/* Lexes and parses the program only (no domain, no check), then prints the
+   canonical text. */
+static int run_fmt(const Options *opt, Arena *arena, Diag *diag) {
+  char *text = NULL;
+  size_t len = 0;
+  if (!read_source(arena, opt->prog_path, &text, &len, diag)) return 2;
+  TokenList toks;
+  DeclList decls = {NULL, 0, 0};
+  if (!lex_source(arena, opt->prog_path, text, len, &toks, diag)) return 1;
+  if (!parse_source(arena, opt->prog_path, ORIGIN_PROGRAM, &toks, &decls, diag)) return 1;
+  FmtText out;
+  fmt_text_init(&out, arena);
+  if (!fmt_program(&out, decls.items, decls.count, &toks)) {
+    return diag_fail(diag, "OOM", NULL, "no memory for the canonical text of %s", opt->prog_path) + 2;
+  }
+  size_t written = out.len == 0 ? 0 : fwrite(out.data, 1, out.len, stdout);
+  if (written != out.len || fflush(stdout) != 0) return diag_fail(diag, "IO", NULL, "cannot write the canonical text") + 2;
+  return 0;
 }
 
 int main(int argc, char **argv) {
@@ -165,8 +313,11 @@ int main(int argc, char **argv) {
   }
   Arena arena;
   arena_init(&arena, ARENA_LIMIT_BYTES);
-  int status = run(&opt, &arena, &diag);
+  int status = opt.command == CMD_FMT     ? run_fmt(&opt, &arena, &diag)
+               : opt.command == CMD_CHECK ? run_check(&opt, &arena, &diag)
+                                          : run(&opt, &arena, &diag);
   arena_release(&arena);
-  if (status != 0 && diag.set) diag_print(&diag, stderr);
+  /* run_check prints its own diagnostics. */
+  if (status != 0 && diag.set && opt.command != CMD_CHECK) diag_print(&diag, stderr);
   return status;
 }

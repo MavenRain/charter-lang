@@ -1,0 +1,9 @@
+-- A full-line comment stays above its declaration.
+-- an end-of-line comment moves to its own line
+base : ℕ
+base = 7
+
+next : ℕ
+next = natAdd base 1
+
+-- A trailing comment stays at the end.

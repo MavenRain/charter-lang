@@ -1,0 +1,25 @@
+-- The assets A as a Pi parameter (M : CMon) (Q2, Q8). S1 declares no
+-- instance of CMon (PLAN 10, O8), so these functions are checked only.
+bitScale : (M : CMon) → (b : Bit) → (a : cmCarrier M) → cmCarrier M
+bitScale M b a = fold (cmZero M) a b
+
+le : (M : CMon) → (a : cmCarrier M) → (b : cmCarrier M) → Bool
+le M a b = option false (λ (d : cmCarrier M) → true) (cmMonus M b a)
+
+double : (M : CMon) → (a : cmCarrier M) → cmCarrier M
+double M a = cmAdd M a a
+
+rightUnit : (M : CMon) → (a : cmCarrier M) → Eq (cmCarrier M) (cmAdd M a (cmZero M)) a
+rightUnit M a = cmUnitR M a
+
+zeroBelow : (M : CMon) → (a : cmCarrier M) → Eq (Option (cmCarrier M)) (cmMonus M (cmAdd M (cmZero M) a) (cmZero M)) (some a)
+zeroBelow M a = cmMonusComplete M (cmZero M) a
+
+pay : (M : CMon) → (who : Address) → (amount : cmCarrier M) → (index : ℕ) → Voucher M
+pay M who amount index = pack who (pack amount index)
+
+payClaim : (M : CMon) → (c : Claim M) → (index : ℕ) → Voucher M
+payClaim M c index = pay M (claimPayee M c) (claimAmount M c) index
+
+paidAmount : (M : CMon) → (c : Claim M) → (index : ℕ) → Eq (cmCarrier M) (voucherAmount M (payClaim M c index)) (claimAmount M c)
+paidAmount M c index = refl

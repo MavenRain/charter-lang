@@ -1,1 +1,2 @@
-def big : Type 64 := Nat
+big : Type 64
+big = ℕ

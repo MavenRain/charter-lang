@@ -1,1 +1,2 @@
-def wrong : Nat := 3 4
+wrong : ℕ
+wrong = 3 4

@@ -7,7 +7,7 @@
      maximum is WASM_MAX_PAGES), it traps.
    - Function 1 + K is IR entry K, exported as its name. Each parameter and the
      result is an i64. Each entry first resets the heap pointer to 0, and it
-     traps on a Flag argument larger than 1.
+     traps on a Bool argument larger than 1.
    - A word is 8 bytes. Word K of the block at address A is at A + 8K.
 
    Each entry has three i64 scratch locals after the IR locals: S and S + 1
@@ -298,8 +298,8 @@ static int part_alloc(Sink *s, const void *arg) {
          op2(s, OP_LOCAL_GET, 1) && op2(s, OP_GLOBAL_SET, 0) && put_byte(s, OP_END);
 }
 
-/* Traps when the Flag parameter K is larger than 1. */
-static int flag_guard(Sink *s, const IrFunc *fn, size_t k) {
+/* Traps when the Bool parameter K is larger than 1. */
+static int bool_guard(Sink *s, const IrFunc *fn, size_t k) {
   return fn->params[k] == IR_SCALAR_NAT ||
          (op2(s, OP_LOCAL_GET, k) && i64_const(s, 1) && put_byte(s, OP_I64_GT_U) && put_byte(s, OP_IF) &&
           put_byte(s, TYPE_EMPTY) && put_byte(s, OP_UNREACHABLE) && put_byte(s, OP_END));
@@ -311,7 +311,7 @@ static int part_entry(Sink *s, const void *arg) {
   size_t k;
   int ok = put_uleb(s, 1) && put_uleb(s, (uint64_t)(fn->local_count - fn->param_count) + 3u) &&
            put_byte(s, TYPE_I64) && i64_const(s, 0) && op2(s, OP_GLOBAL_SET, 0);
-  for (k = 0; k < fn->param_count && ok; k++) ok = flag_guard(s, fn, k);
+  for (k = 0; k < fn->param_count && ok; k++) ok = bool_guard(s, fn, k);
   return ok && emit_block(s, &fn->body, t, 0) && put_byte(s, OP_UNREACHABLE) && put_byte(s, OP_END);
 }
 

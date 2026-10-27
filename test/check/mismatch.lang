@@ -1,1 +1,2 @@
-def wrong : Flag := 3
+wrong : Bool
+wrong = 3

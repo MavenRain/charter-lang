@@ -10,7 +10,19 @@
 extern const unsigned char domain_source[];
 extern const size_t domain_source_len;
 
-/* Parses the embedded domain file, then the program, into one list. */
-int front_load(Arena *arena, const char *source, const char *text, size_t len, DeclList *out, Diag *diag);
+/* The loaded declarations. DECLS holds the DOMAIN_COUNT domain declarations
+   first, then the program. TOKS holds the program tokens and comments when
+   LEXED is 1. After a parse failure DECLS holds the complete declarations
+   before the failure. */
+typedef struct {
+  DeclList decls;
+  size_t domain_count;
+  TokenList toks;
+  int lexed;
+} Front;
+
+/* Parses the embedded domain file, then the program, into OUT. Returns 1,
+   or 0 after a diagnostic. */
+int front_load(Arena *arena, const char *source, const char *text, size_t len, Front *out, Diag *diag);
 
 #endif

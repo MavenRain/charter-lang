@@ -1,14 +1,33 @@
--- Formers F1 to F4: products, sums, options and lists.
-def price : Nat := 1200
-def both : Prod Nat Flag := pair price flagYes
-def left : Nat := first both
-def right : Flag := second both
-def size : (n : Nat) -> Nat := fun (n : Nat) => natAdd n 1
-def count : (n : Nat) -> Nat := fun (n : Nat) => n
-def choice : Sum Nat Nat := inr 5
-def picked : Nat := either size count choice
-def nothing : Option Nat := none
-def something : Option Nat := some 7
-def orZero : (o : Option Nat) -> Nat := fun (o : Option Nat) => option 0 (fun (n : Nat) => n) o
-def xs : List Nat := cons 1 (cons 2 (cons 3 nil))
-def empty : List Nat := nil
+-- Formers F1 to F3: products, sums and options.
+price : ℕ
+price = 1200
+
+both : ℕ × Bool
+both = pack price true
+
+left : ℕ
+left = witness both
+
+right : Bool
+right = payload both
+
+size : (n : ℕ) → ℕ
+size n = natAdd n 1
+
+count : (n : ℕ) → ℕ
+count n = n
+
+choice : Sum ℕ ℕ
+choice = inr 5
+
+picked : ℕ
+picked = either size count choice
+
+nothing : Option ℕ
+nothing = none
+
+something : Option ℕ
+something = some 7
+
+orZero : (o : Option ℕ) → ℕ
+orZero o = option 0 (λ (n : ℕ) → n) o

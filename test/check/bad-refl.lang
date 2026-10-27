@@ -1,2 +1,5 @@
-def price : Nat := 1200
-def wrong : Eq Nat (natAdd price 1) price := refl
+price : ℕ
+price = 1200
+
+wrong : Eq ℕ (natAdd price 1) price
+wrong = refl

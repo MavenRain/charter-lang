@@ -1,0 +1,12 @@
+-- ASCII aliases: Nat, ->, * and Sigma.
+twice : (f : Nat -> Nat) -> Nat -> Nat
+twice f x = f (f x)
+
+apply : (Nat -> Nat) -> Nat
+apply g = g 1
+
+pair : Nat * Nat
+pair = pack 1 2
+
+dep : Sigma (n : Nat) Nat
+dep = pack 0 5

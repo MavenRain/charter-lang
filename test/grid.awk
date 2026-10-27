@@ -1,5 +1,5 @@
 # Reads a `langc ir` dump and prints one `NAME [ARGS...]` line for each case of
-# the differential grid. A Flag parameter takes 0 and 1. A Nat parameter takes
+# the differential grid. A Bool parameter takes 0 and 1. A Nat parameter takes
 # small values, and, when the entry has no loop, also the values at the 2^32
 # and 2^64 limits (ADD_CARRY and MUL_CARRY cases). An entry with a loop gets
 # only small values, because a large count runs past the evaluator fuel.
@@ -28,7 +28,7 @@ function cases(nm, ty, nats,    t, nt, k, c, nc, j, v, nv, m, out) {
   c[1] = nm
   nt = split(ty, t, " ")
   for (k = 1; k <= nt; k++) {
-    nv = split(t[k] == "flag" ? "0 1" : nats, v, " ")
+    nv = split(t[k] == "bool" ? "0 1" : nats, v, " ")
     m = 0
     for (j = 1; j <= nc; j++) {
       for (i2 = 1; i2 <= nv; i2++) out[++m] = c[j] " " v[i2]

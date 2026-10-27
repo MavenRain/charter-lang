@@ -1,1 +1,1 @@
-axiom magic : Nat
+postulate magic : ℕ

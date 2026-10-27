@@ -5,33 +5,39 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/lang-review.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 cat >"$tmp/capture.lang" <<'EOF'
-def keep : Nat -> Nat -> Nat := fun x y => x
-def value : Unit -> Nat -> Nat -> Nat := fun u y => keep y
+keep : ℕ → ℕ → ℕ
+keep x y = x
+
+value : Unit → ℕ → ℕ → ℕ
+value u y = keep y
 EOF
 normal=$(build/langc eval "$tmp/capture.lang" value)
-printf 'def value : Unit -> Nat -> Nat -> Nat := %s\ndef answer : Nat := value unit 4 9\n' "$normal" >"$tmp/roundtrip.lang"
+printf 'value : Unit → ℕ → ℕ → ℕ\nvalue = %s\n\nanswer : ℕ\nanswer = value unit 4 9\n' "$normal" >"$tmp/roundtrip.lang"
 test "$(build/langc eval "$tmp/roundtrip.lang" answer)" = 4
 
 # Reducing a closure can expose a constructor with the binder's old name.
 cat >"$tmp/constructor.lang" <<'EOF'
-def constant : Unit -> Color := fun u => red
-def value : Unit -> Color := fun red => constant red
+constant : Unit → DecE
+constant u = decRelease
+
+value : Unit → DecE
+value decRelease = constant decRelease
 EOF
 normal=$(build/langc eval "$tmp/constructor.lang" value)
-printf 'def value : Unit -> Color := %s\ndef answer : Nat := fold 1 2 3 (value unit)\n' "$normal" >"$tmp/roundtrip.lang"
+printf 'value : Unit → DecE\nvalue = %s\n\nanswer : ℕ\nanswer = fold 1 2 3 (value unit)\n' "$normal" >"$tmp/roundtrip.lang"
 test "$(build/langc eval "$tmp/roundtrip.lang" answer)" = 1
 
 # A generated eta binder must also print as a source identifier.
-printf 'def value : Unit -> Nat -> Nat -> Nat := fun u => natAdd\n' >"$tmp/eta.lang"
+printf 'value : Unit → ℕ → ℕ → ℕ\nvalue u = natAdd\n' >"$tmp/eta.lang"
 normal=$(build/langc eval "$tmp/eta.lang" value)
-printf 'def value : Unit -> Nat -> Nat -> Nat := %s\ndef answer : Nat := value unit 4 9\n' "$normal" >"$tmp/roundtrip.lang"
+printf 'value : Unit → ℕ → ℕ → ℕ\nvalue = %s\n\nanswer : ℕ\nanswer = value unit 4 9\n' "$normal" >"$tmp/roundtrip.lang"
 test "$(build/langc eval "$tmp/roundtrip.lang" answer)" = 13
 
 # More than 64 live binders used to read past the printer's name table.
 awk 'BEGIN {
-  printf "def value : "; for (i = 0; i < 70; i++) printf "Unit -> ";
-  printf "Unit := fun "; for (i = 0; i < 70; i++) printf "u%d ", i;
-  print "=> u69"
+  printf "value : "; for (i = 0; i < 70; i++) printf "Unit → ";
+  printf "Unit\nvalue"; for (i = 0; i < 70; i++) printf " u%d", i;
+  print " = u69"
 }' >"$tmp/binders.lang"
 awk 'BEGIN {
   for (i = 0; i < 70; i++) printf "fun u%d => ", i;
@@ -42,15 +48,22 @@ cmp "$tmp/want" "$tmp/got"
 
 # bind preserves a Sum error and can change the success type.
 cat >"$tmp/sum.lang" <<'EOF'
-def input : Sum Nat Nat := inl 7
-def output : Sum Nat Flag := bind input (fun x => inr flagYes)
-def right : Sum Nat Nat := inr 7
-def mapped : Sum Nat Flag := bind right (fun x => inr flagYes)
+input : Sum ℕ ℕ
+input = inl 7
+
+output : Sum ℕ Bool
+output = bind input (λ x → inr true)
+
+right : Sum ℕ ℕ
+right = inr 7
+
+mapped : Sum ℕ Bool
+mapped = bind right (λ x → inr true)
 EOF
 test "$(build/langc eval "$tmp/sum.lang" output)" = 'inl 7'
-test "$(build/langc eval "$tmp/sum.lang" mapped)" = 'inr flagYes'
+test "$(build/langc eval "$tmp/sum.lang" mapped)" = 'inr true'
 # A truncated normal form must not be reported as successful evaluation.
-printf 'def value : List Nat := fold (fun xs => cons 0 xs) nil 10000\n' >"$tmp/large.lang"
+printf 'value : Stack\nvalue = fold (λ (s : Stack) → push 0 s) bottom 10000\n' >"$tmp/large.lang"
 status=0
 build/langc eval "$tmp/large.lang" value >"$tmp/got" 2>"$tmp/err" || status=$?
 test "$status" = 1

@@ -1,2 +1,5 @@
-def twin : Nat := 1
-def twin : Nat := 2
+twin : ℕ
+twin = 1
+
+twin : ℕ
+twin = 2

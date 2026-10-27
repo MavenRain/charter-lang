@@ -3,7 +3,9 @@
 This plan has 11 sections. `design/DESIGN.md` holds the USER ask (section
 1) and the USER rulings (section 2). `Lnnn` is a line of
 `design/OFFCHAIN-ESCROWDAO.html`, the design note snapshot. An item marked
-(a) in section 11 is the recommended option. No Q item is ruled yet.
+(a) in section 11 is the recommended option. The USER ruled Q1, Q2, Q4, Q6,
+Q8 and Q9 on 2026-10-27 (section 11 quotes each ruling). The other Q items
+are OPEN.
 
 ## 1. Rulings and readings
 
@@ -81,7 +83,7 @@ a former: a system is legal only as the side of `hcomp` (quorum-lang 2.2).
 | `BallotA`, `DecA` | `B_A = {Adopt, Reject}`, `D_A = {Adopt, Reject, Hold}` | equality, case | L226, L395, L399 to L402 |
 | `Bit` | flags `closed`, `ok`, `z`, `(r, rf)`, `(ad, rj)` | equality, `+`, `bit * A`, case on a pair with `(1, 1)` excluded | L515, L551 to L554, L581 to L592 |
 | `Nat` | epochs, positions, counts, thresholds | `+`, `-` (truncating), `<=`, `<`, `e + 1`, `f(n) = floor((n-1)/3)` | L229, L236, L246, L266, L321, L395 |
-| `A` | cancellative commutative asset monoid (Q8) | `+`, `0`, partial `-` defined iff `n <= credit a`, `<=`, sum over finite support, `bit * A` | L227, L373, L381, L421, L605 |
+| `A` | monoid plus commutativity, cancellation and a decidable order with witness `monus`; `CMon` structure, Pi parameter (Q8) | `+`, `0`, partial `-` defined iff `n <= credit a`, `<=`, sum over finite support, `bit * A` | L227, L373, L381, L421, L605 |
 | `Address` | opaque key | equality, map key | L256, L360 |
 | `Receipt` | opaque, issued by the rail | `nu : Receipt -> A`, set membership, insert | L228, L256, L533 |
 | `Voucher` | record `Address x A x Nat` | construct, sum of amounts | L228, L382, L421 |
@@ -93,6 +95,27 @@ a former: a system is legal only as the side of `hcomp` (quorum-lang 2.2).
 | `Digest`, `Nullifier`, `Key` | opaque values of the representation | equality | L496, L497, L522 |
 | `CtA e`, `CtOneHot e`, `CtBit e` | ciphertexts under `pk_e` (Q3) | the FHE ops of section 5.3 | L207, L520, L549 to L560 |
 | `DecShare e`, `SigShare e` | shares of `sk_e`, of the signing key of `vk_e` | combine over `S` in `A_t` | L198, L208, L551 |
+
+Weakest structure for each use of `A`:
+
+| Use of `A` | Note | Weakest level |
+|---|---|---|
+| `+` | L227, L374 | magma |
+| `0` (start state, empty sum) | L374 | monoid |
+| `<=` as `exists d. a + d = b` | L227, L375 | monoid (a preorder) |
+| `<=` decided at run time (withdraw guard) | L605 | monoid plus decidable order |
+| partial `-` (one value when `n <= c`) | L380, L381 | monoid plus commutativity, cancellation, decidable order |
+| sum over finite support | L373, L421, L422 | monoid plus commutativity |
+| `bit * A` (select `a` or `0`) | L551 to L554 | monoid |
+| cancellation | L381 | monoid plus cancellation |
+| Invariant I | L372 to L374 | monoid plus commutativity, cancellation |
+| Cor 4.2 | L375, L376 | monoid plus commutativity |
+| Conservation | L420 to L422 | monoid plus commutativity |
+| radix `u64` in Wasm, FHE, ZK range checks | Q-C2, Q-C3 | `Nat` (target points only: S3, S5, S7) |
+
+The declared level is the join of the rows: monoid plus commutativity,
+cancellation and a decidable order. `Nat` appears only at the three target
+points.
 
 ### 3.2 Operations
 
@@ -276,7 +299,7 @@ EXIT 0 (serial log with `echo "EXIT $?"`).
 | Slice | Scope | Gate |
 |---|---|---|
 | S0 | seed from the `tcc-wasm` kit; DESIGN, PLAN, README, AGENTS | kit gate EXIT 0; dash scan clean |
-| S1 | front end on the leaf surface (Q9); R1 cells and `REFUSE_CELL`, `REFUSE_DATA`; base enums, `Nat`, `Bit`, `A`, records (Q1, Q2, Q4, Q6, Q8); `langc fmt`; `langc check --json` with fix hints and counts parsed and typed | fmt round-trip; one JSON shape test per refusal code; R1 refusal rows; kit regressions pass |
+| S1 | front end on the leaf surface (Q9); R1 cells and `REFUSE_CELL`, `REFUSE_DATA`; base enums, `Nat`, `Bit`, `A` as `CMon` (monoid plus commutativity, cancellation and a decidable order; Pi parameter, Q8), records (Q1, Q2, Q4, Q6); `langc fmt`; `langc check --json` with fix hints and counts parsed and typed | fmt round-trip; one JSON shape test per refusal code; R1 refusal rows; kit regressions pass |
 | S2 | domain prelude in the clear: `kappa`, W1 to W3, `Tally`, `theta`, `Amd`, `T` (Q5, Q7), the transcript fold, the 10 operations; law discharge (section 6) | each law row discharged on the examples; mutants of `theta`, W1 and Invariant I are killed |
 | S3 | Wasm for the clear meaning (client and node entry points) | wasm-validate; differential against `langc eval`, 0 mismatches |
 | S4 | Poseidon2 (Q-C4), Merkle root, PRF, hash chain; FROST verify (Q-C1) | published test vectors (RFC 9591 Appendix E; Poseidon2 reference vectors for the chosen field) |
@@ -301,23 +324,27 @@ S5 and S6 are the largest slices (Q-C2).
 | O5 | the 128-bit TFHE parameter set and its source (Q-C2); no local file to verify one | OPEN (S5) |
 | O6 | a change of FHE scheme or proof system is not an `enact` and needs a proof that `sem` does not change (L636) | OPEN |
 | O7 | token counter: a fixed offline proxy, as leaf-lang Q13 | OPEN (S9) |
+| O8 | the `Nat` instance of `CMon`: its law fields need induction proofs that the kit checker cannot write yet (USER accepted this cost, Q8) | OPEN (S2) |
+| O9 | the domain keeps the kit data types `Stack` and `Tree` as kit regression subjects (spine lowering, `REFUSE_RUNTIME_TREE`, the large-stack review row); USER ruling 2026-10-27: "Keep Stack, Tree only (Recommended)" | OPEN (S2: FreeMon replaces them) |
 
 ## 11. Q items
 
 Each row: the question, (a) the recommended option, the other options,
-the scope cost, the status. No row is ruled.
+the scope cost, the status. Rows Q1, Q2, Q4, Q6, Q8 and Q9 are RULED
+2026-10-27: the Status cell quotes the USER ruling verbatim. The other rows
+are OPEN.
 
 | ID | Question | (a) recommended | Other options | Scope cost | Status |
 |---|---|---|---|---|---|
-| Q1 | Sigma over `K_wf` (L157, L260) | ambient Sigma; `K_wf` is a Sigma over a decidable check | (b) indexed Env CC; (c) refuse | none (S1) | OPEN |
-| Q2 | arrows `S -> T S` (L285) | ambient Pi; R1 limits declared constructors only | none | none (S1) | OPEN |
+| Q1 | Sigma over `K_wf` (L157, L260) | ambient Sigma; `K_wf` is a Sigma over a decidable check | (b) indexed Env CC; (c) refuse | none (S1) | RULED 2026-10-27, (a): "Q1 =  use built-in Sigma" |
+| Q2 | arrows `S -> T S` (L285) | ambient Pi; R1 limits declared constructors only | none | none (S1) | RULED 2026-10-27, (a): "Q2 = Use plain function types (Pi) for arrows)" |
 | Q3 | `Ct_e`, `Share_e` (L207, L208) | base types `CtA e`, `CtOneHot e`, `CtBit e`, `DecShare e`, `SigShare e`, indexed by the epoch value; meaning maps law-only | (b) sealed identity CM `Ct : U -> U` (quorum `Hidden`); (c) quotient HIT | small (S5) | OPEN |
-| Q4 | records (L228, L256, L257) | named iterated Sigma (quorum O15); CC stays admitted with no domain use | (b) leaf style, no record form | small (S1) | OPEN |
+| Q4 | records (L228, L256, L257) | named iterated Sigma (quorum O15); CC stays admitted with no domain use | (b) leaf style, no record form | small (S1) | RULED 2026-10-27, (a): "Q4 = use iterated Sigma" |
 | Q5 | `T` (L285, L286) | one CM in `domain/domain.lang`: generator `ret`, 0-cell `none`, operation `emit : Voucher -> T Z -> T Z`, 1-cell `emit v none = none`, set truncation; normal forms `1 + Z x List Voucher`; bind is the recursor; Kleisli laws by induction | (b) `Option` and `Writer` with a distributive law; (c) a defined composite `Option (Z x FreeMon Voucher)` | medium (S2) | OPEN |
-| Q6 | `Nat`, `Bit` | base types (closed data that R2 limits) | (b) `mu X. 1 + X` | none (S1) | OPEN |
+| Q6 | `Nat`, `Bit` | base types (closed data that R2 limits) | (b) `mu X. 1 + X` | none (S1) | RULED 2026-10-27, (a): "Q6 = Nat and Bit are base types" |
 | Q7 | the orbit quotient (L251) | no HIT; `Tally` (Def 2.2, L236) represents the orbit; rules only as `theta : Tally -> D_E`, so W3 holds by construction (L243); Kan laws erased at discrete `D` (Prop 2.6) | (b) a set-quotient HIT | none (S2) | OPEN |
-| Q8 | `A` (L227) | `A = Nat` in the meaning; 64-bit bound in Wasm and FHE (radix `u64`); no overflow in `T` | (b) an abstract monoid with an instance per target | small (S1) | OPEN |
-| Q9 | surface | port the leaf surface: Unicode canonical, ASCII aliases with `W_NONCANON` | (b) ASCII only | small (S1) | OPEN |
+| Q8 | `A` (L227) | `A = Nat` in the meaning; 64-bit bound in Wasm and FHE (radix `u64`); no overflow in `T` | (b) an abstract monoid with an instance per target | small (S1) | RULED 2026-10-27, not (a). After S0: "Q8 = Try to use general magma, semigroup, or monoid, in that order, before specializing to Nat for the asset type". In S1, Q8-form: "Structure as a Pi parameter"; Q8-laws: "Monoid + those laws (Recommended)". Result: `CMon` (3.1) |
+| Q9 | surface | port the leaf surface: Unicode canonical, ASCII aliases with `W_NONCANON` | (b) ASCII only | small (S1) | RULED 2026-10-27, (a): "Q9 = reuse leaf-lang surface syntax" |
 | Q10 | O-off-1 to O-off-8 | take the note drafts (L647 to L654) | (b) rule each | none (S2) | OPEN |
 | Q-C1 | FROST ciphersuite | FROST(Ed25519, SHA-512), RFC 9591, context "FROST-ED25519-SHA512-v1", Appendix E vectors, Pedersen DKG for `vk`; no EVM, so secp256k1 gives nothing | (b) FROST(secp256k1, SHA-256) (quorum) | one slice (S4) | OPEN |
 | Q-C2 | FHE scheme and parameter set | threshold TFHE (CGGI, PBS, 64-bit torus); `A` as radix `u64`, 32 blocks of 2-bit message and 2-bit carry; the 128-bit set is OPEN (unverified candidate: tfhe-rs `PARAM_MESSAGE_2_CARRY_2_KS_PBS`), verified at S5 | (b) threshold BFV or BGV (no PBS; `theta` and `n <= credit a` become deep polynomial circuits) | largest (S5, S6) | OPEN |

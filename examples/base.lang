@@ -1,0 +1,26 @@
+-- The charter base data in use (PLAN 3.1): decisions, ballots, bits and
+-- addresses. A fold over a domain data type has one case for each
+-- constructor.
+alice : Address
+alice = address 7
+
+aliceKey : ℕ
+aliceKey = addressKey alice
+
+refundCode : ℕ
+refundCode = fold 1 2 3 decRefund
+
+adopted : DecA
+adopted = fold amendAdopt amendReject ballotAdopt
+
+toggle : (b : Bit) → Bit
+toggle b = fold bitOne bitZero b
+
+toggled : Bit
+toggled = toggle bitZero
+
+pile : Stack
+pile = push 1 (push 2 bottom)
+
+pileDepth : ℕ
+pileDepth = fold 0 (λ (top : ℕ) (rest : ℕ) → natAdd rest 1) pile

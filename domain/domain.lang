@@ -1,21 +1,102 @@
--- Sample domain. Replace it with your design. See domain/README.md.
--- Each family, constructor, field and def name here becomes a core name
--- (rule R4). Only this file can declare a family (rule R1).
-family Color := red | green | blue
-family Item := makeItem (itemColor : Color) (itemPrice : Nat) (itemCount : Nat)
-family Stack := bottom | push (top : Nat) (rest : Stack)
--- A tree: a fold over a tree that exists at run time is a HOST-LIMIT.
-family Tree := tip | fork (forkLeft : Tree) (forkRight : Tree)
--- An indexed family (former F15): `Lot 3` is a lot of size 3.
-family Lot (size : Nat) := makeLot (lotPrice : Nat)
+-- The charter-lang domain (PLAN 3.1). Each data type, constructor, field
+-- and definition name here becomes a core name (rule R4). Only this file
+-- can declare a data type (rule R1).
+-- Kit regression subjects, not charter data: `langc ir` walks a Stack
+-- spine, and a fold over a Tree that exists at run time is a HOST-LIMIT.
+-- FreeMon replaces them at S2 (PLAN 10, O9).
+data Stack : Type where
+  bottom : Stack
+  push : (top : ℕ) → (rest : Stack) → Stack
 
-def lineTotal : (item : Item) -> Nat :=
-  fun (item : Item) => natMul (itemPrice item) (itemCount item)
-def isRed : (color : Color) -> Flag :=
-  fun (color : Color) => fold flagYes flagNo flagNo color
-def total : (items : List Item) -> Nat :=
-  fun (items : List Item) => fold (fun (item : Item) (acc : Nat) => natAdd (lineTotal item) acc) 0 items
-def redTotal : (items : List Item) -> Nat :=
-  fun (items : List Item) => total (filter (fun (item : Item) => isRed (itemColor item)) items)
-def depth : (s : Stack) -> Nat :=
-  fun (s : Stack) => fold 0 (fun (top : Nat) (rest : Nat) => natAdd rest 1) s
+data Tree : Type where
+  tip : Tree
+  fork : (forkLeft : Tree) → (forkRight : Tree) → Tree
+
+-- Escrow decisions D_E. Escrow ballots are B_E = D_E (L226).
+data DecE : Type where
+  decRelease : DecE
+  decRefund : DecE
+  decHold : DecE
+
+-- Amendment ballots B_A and amendment decisions D_A (L226).
+data BallotA : Type where
+  ballotAdopt : BallotA
+  ballotReject : BallotA
+
+data DecA : Type where
+  amendAdopt : DecA
+  amendReject : DecA
+  amendHold : DecA
+
+-- A flag (L515, L551 to L554). The kit type Bool stays a host name.
+data Bit : Type where
+  bitZero : Bit
+  bitOne : Bit
+
+-- An opaque key (L256, L360): one field over a ℕ key.
+data Address : Type where
+  address : (addressKey : ℕ) → Address
+
+-- The assets A (L227, Q8): a cancellative commutative monoid with a
+-- decidable order. monus b a = some d if and only if a + d = b.
+CMon : Type 1
+CMon = (carrier : Type 0) × (add : (x : carrier) → (y : carrier) → carrier) × (zero : carrier) × (assoc : (a : carrier) → (b : carrier) → (c : carrier) → Eq carrier (add (add a b) c) (add a (add b c))) × (unitL : (a : carrier) → Eq carrier (add zero a) a) × (unitR : (a : carrier) → Eq carrier (add a zero) a) × (comm : (a : carrier) → (b : carrier) → Eq carrier (add a b) (add b a)) × (cancel : (a : carrier) → (b : carrier) → (c : carrier) → (e : Eq carrier (add a c) (add b c)) → Eq carrier a b) × (monus : (x : carrier) → (y : carrier) → Option carrier) × (monusSound : (a : carrier) → (b : carrier) → (d : carrier) → (e : Eq (Option carrier) (monus b a) (some d)) → Eq carrier (add a d) b) × ((a : carrier) → (d : carrier) → Eq (Option carrier) (monus (add a d) a) (some d))
+
+cmCarrier : (M : CMon) → Type 0
+cmCarrier M = witness M
+
+cmAdd : (M : CMon) → (x : cmCarrier M) → (y : cmCarrier M) → cmCarrier M
+cmAdd M = witness (payload M)
+
+cmZero : (M : CMon) → cmCarrier M
+cmZero M = witness (payload (payload M))
+
+cmAssoc : (M : CMon) → (a : cmCarrier M) → (b : cmCarrier M) → (c : cmCarrier M) → Eq (cmCarrier M) (cmAdd M (cmAdd M a b) c) (cmAdd M a (cmAdd M b c))
+cmAssoc M = witness (payload (payload (payload M)))
+
+cmUnitL : (M : CMon) → (a : cmCarrier M) → Eq (cmCarrier M) (cmAdd M (cmZero M) a) a
+cmUnitL M = witness (payload (payload (payload (payload M))))
+
+cmUnitR : (M : CMon) → (a : cmCarrier M) → Eq (cmCarrier M) (cmAdd M a (cmZero M)) a
+cmUnitR M = witness (payload (payload (payload (payload (payload M)))))
+
+cmComm : (M : CMon) → (a : cmCarrier M) → (b : cmCarrier M) → Eq (cmCarrier M) (cmAdd M a b) (cmAdd M b a)
+cmComm M = witness (payload (payload (payload (payload (payload (payload M))))))
+
+cmCancel : (M : CMon) → (a : cmCarrier M) → (b : cmCarrier M) → (c : cmCarrier M) → (e : Eq (cmCarrier M) (cmAdd M a c) (cmAdd M b c)) → Eq (cmCarrier M) a b
+cmCancel M = witness (payload (payload (payload (payload (payload (payload (payload M)))))))
+
+cmMonus : (M : CMon) → (x : cmCarrier M) → (y : cmCarrier M) → Option (cmCarrier M)
+cmMonus M = witness (payload (payload (payload (payload (payload (payload (payload (payload M))))))))
+
+cmMonusSound : (M : CMon) → (a : cmCarrier M) → (b : cmCarrier M) → (d : cmCarrier M) → (e : Eq (Option (cmCarrier M)) (cmMonus M b a) (some d)) → Eq (cmCarrier M) (cmAdd M a d) b
+cmMonusSound M = witness (payload (payload (payload (payload (payload (payload (payload (payload (payload M)))))))))
+
+cmMonusComplete : (M : CMon) → (a : cmCarrier M) → (d : cmCarrier M) → Eq (Option (cmCarrier M)) (cmMonus M (cmAdd M a d) a) (some d)
+cmMonusComplete M = payload (payload (payload (payload (payload (payload (payload (payload (payload (payload M)))))))))
+
+-- A voucher (a, n, i) that the rail pays (L228): address, amount, index.
+Voucher : (M : CMon) → Type 0
+Voucher M = Address × cmCarrier M × ℕ
+
+voucherAddress : (M : CMon) → (v : Voucher M) → Address
+voucherAddress M v = witness v
+
+voucherAmount : (M : CMon) → (v : Voucher M) → cmCarrier M
+voucherAmount M v = witness (payload v)
+
+voucherIndex : (M : CMon) → (v : Voucher M) → ℕ
+voucherIndex M v = payload (payload v)
+
+-- A claim (p, q, n) (L257): payer, payee and amount.
+Claim : (M : CMon) → Type 0
+Claim M = Address × Address × cmCarrier M
+
+claimPayer : (M : CMon) → (c : Claim M) → Address
+claimPayer M c = witness c
+
+claimPayee : (M : CMon) → (c : Claim M) → Address
+claimPayee M c = witness (payload c)
+
+claimAmount : (M : CMon) → (c : Claim M) → cmCarrier M
+claimAmount M c = payload (payload c)

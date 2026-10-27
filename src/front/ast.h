@@ -43,9 +43,9 @@ typedef struct {
 } Ctor;
 
 typedef enum {
-  DECL_DEF,    /* def [rec] name : type := body */
-  DECL_AXIOM,  /* axiom name : type */
-  DECL_FAMILY  /* family name params := ctor | ... */
+  DECL_DEF,    /* [rec] name : type, then the clause name args = body */
+  DECL_AXIOM,  /* postulate name : type */
+  DECL_FAMILY  /* data name params : Type where, then one constructor a line */
 } DeclKind;
 
 /* A family is legal only in the domain file (rule R1). */
@@ -60,6 +60,8 @@ typedef struct {
   int is_rec;
   int line;
   int col;
+  int end_line; /* the last token of the declaration */
+  int end_col;
   const char *name;
   const Term *type;
   const Term *body;

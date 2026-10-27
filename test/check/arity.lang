@@ -1,1 +1,2 @@
-def wrong : Nat := natAdd 1
+wrong : ℕ
+wrong = natAdd 1

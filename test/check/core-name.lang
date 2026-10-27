@@ -1,1 +1,2 @@
-def natAdd : Nat := 1
+natAdd : ℕ
+natAdd = 1

@@ -1,10 +1,24 @@
 -- Formers F9 and F10: functions and dependent functions.
-def id : (n : Nat) -> Nat := fun (n : Nat) => n
-def next : Nat -> Nat := fun n => natAdd n 1
-def twice : (f : (n : Nat) -> Nat) -> (n : Nat) -> Nat :=
-  fun (f : (n : Nat) -> Nat) (n : Nat) => f (f n)
-def four : Nat := twice next 2
-def pairOf : (x y : Nat) -> Prod Nat Nat := fun (x y : Nat) => pair x y
-def poly : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x
-def three : Nat := poly Nat 3
-def applied : Nat := (fun (n : Nat) => natMul n n) 6
+id : (n : ℕ) → ℕ
+id n = n
+
+next : ℕ → ℕ
+next n = natAdd n 1
+
+twice : (f : (n : ℕ) → ℕ) → (n : ℕ) → ℕ
+twice f n = f (f n)
+
+four : ℕ
+four = twice next 2
+
+pairOf : (x : ℕ) → (y : ℕ) → ℕ × ℕ
+pairOf x y = pack x y
+
+poly : (A : Type 0) → (x : A) → A
+poly A x = x
+
+three : ℕ
+three = poly ℕ 3
+
+applied : ℕ
+applied = (λ (n : ℕ) → natMul n n) 6

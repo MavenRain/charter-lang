@@ -1,0 +1,3 @@
+data Coin : Type where
+  heads : Coin
+  tails : Coin

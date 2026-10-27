@@ -1,1 +1,2 @@
-def Bool : Type 0 := Flag
+Text : Type 0
+Text = Bool

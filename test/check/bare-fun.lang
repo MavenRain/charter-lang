@@ -1,1 +1,2 @@
-def wrong : Nat := (fun n => n) 3
+wrong : ℕ
+wrong = (λ n → n) 3

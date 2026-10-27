@@ -1,1 +1,2 @@
-def loop : (n : Nat) -> Nat := fun (n : Nat) => loop n
+loop : (n : ℕ) → ℕ
+loop n = loop n

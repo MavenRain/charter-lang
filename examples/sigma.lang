@@ -1,6 +1,15 @@
 -- Former F11: dependent pairs.
-def price : Nat := 1200
-def offer : Sigma (n : Nat) (Eq Nat n price) := pack 1200 refl
-def offered : Nat := witness offer
-def proof : Eq Nat (witness offer) price := payload offer
-def starred : (n : Nat) * Eq Nat n price := pack price refl
+price : ℕ
+price = 1200
+
+offer : (n : ℕ) × Eq ℕ n price
+offer = pack 1200 refl
+
+offered : ℕ
+offered = witness offer
+
+proof : Eq ℕ (witness offer) price
+proof = payload offer
+
+starred : (n : ℕ) × Eq ℕ n price
+starred = pack price refl

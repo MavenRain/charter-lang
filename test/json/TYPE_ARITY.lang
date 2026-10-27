@@ -1,0 +1,2 @@
+wrong : ℕ
+wrong = natAdd 1

@@ -14,6 +14,5 @@ universe.lang TYPE_MISMATCH
 universe-range.lang TYPE_UNIVERSE
 no-type.lang TYPE_INFER
 bare-fun.lang TYPE_INFER
-filter-sum.lang TYPE_MISMATCH
 arity.lang TYPE_ARITY
 not-function.lang TYPE_NOT_FUNCTION

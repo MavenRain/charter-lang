@@ -29,6 +29,12 @@ realization matrix.
 - A test is a function `p : A -> Option Unit`. The result `some unit` keeps
   the element. A host can use a type with two values in place of
   `Option Unit` (mech uses `Flag`, and `true` keeps).
+- charter-lang: the forms in this file keep the kit syntax. The charter-lang
+  program surface is `SPEC.md` section 2, with the ASCII aliases of
+  `SPEC.md` section 2.3. charter-lang drops some kit names (for example
+  `Flag`, `Prod`, `List` and `filter`); `langc check` gives the
+  replacement as a hint. `formers/tcc-wasm.md` gives the charter-lang status
+  of each former.
 
 ## 2. Programs and refusal rules
 
@@ -43,13 +49,14 @@ and operations, and to the forms of this file. The compiler applies these
 refusal rules. They keep a program inside the former layer.
 
 - **R1. No new data type.** The compiler refuses the host form that declares
-  a data type (mech `mu`; assay `mu` and `nu`).
-- **R2. No unproved fact.** The compiler refuses `axiom`. When the host kernel
+  a data type (mech `mu`; assay `mu` and `nu`; charter-lang `data`).
+- **R2. No unproved fact.** The compiler refuses `axiom` (charter-lang
+  `postulate`). When the host kernel
   accepts an axiom, the compiler runs the host axiom report on its output. It
   refuses each axiom that the host file does not list as part of the target
   protocol.
 - **R3. No general recursion.** The compiler refuses the host form for a
-  recursive definition (`def rec`). Recursion comes only from F6 `fold` and
+  recursive definition (`def rec`; charter-lang `rec`). Recursion comes only from F6 `fold` and
   F7 `unfold`. When F7 has the status HOST-LIMIT, recursion comes only from
   F6.
 - **R4. No new core name.** The compiler refuses a definition whose name is

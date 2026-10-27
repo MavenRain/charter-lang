@@ -1,1 +1,2 @@
-def wrong : Nat := first (pair none 1)
+wrong : ℕ
+wrong = witness (pack none 1)

@@ -81,27 +81,20 @@ typedef struct {
 
 static const Builtin BUILTINS[] = {
   {"Nat", 0, RULE_TYPE0, OP_NAT, OP_NAT, 0},
-  {"Flag", 0, RULE_TYPE0, OP_FLAG, OP_NAT, 0},
+  {"Bool", 0, RULE_TYPE0, OP_BOOL, OP_NAT, 0},
   {"Unit", 0, RULE_TYPE0, OP_UNIT, OP_NAT, 0},
-  {"Prod", 2, RULE_TYPE2, OP_PROD, OP_NAT, 0},
   {"Sum", 2, RULE_TYPE2, OP_SUM, OP_NAT, 0},
   {"Option", 1, RULE_TYPE1, OP_OPTION, OP_NAT, 0},
-  {"List", 1, RULE_TYPE1, OP_LIST, OP_NAT, 0},
   {"Eq", 3, RULE_EQ, OP_EQ, OP_NAT, 0},
   {"unit", 0, RULE_VALUE0, OP_UNIT_VAL, OP_UNIT, 0},
-  {"flagYes", 0, RULE_VALUE0, OP_FLAG_YES, OP_FLAG, 0},
-  {"flagNo", 0, RULE_VALUE0, OP_FLAG_NO, OP_FLAG, 0},
-  {"pair", 2, RULE_PAIR, OP_PAIR, OP_PROD, 0},
+  {"true", 0, RULE_VALUE0, OP_TRUE, OP_BOOL, 0},
+  {"false", 0, RULE_VALUE0, OP_FALSE, OP_BOOL, 0},
   {"inl", 1, RULE_INJ, OP_INL, OP_SUM, 0},
   {"inr", 1, RULE_INJ, OP_INR, OP_SUM, 1},
   {"none", 0, RULE_EMPTY, OP_NONE, OP_OPTION, 0},
-  {"nil", 0, RULE_EMPTY, OP_NIL, OP_LIST, 0},
   {"some", 1, RULE_SOME, OP_SOME, OP_OPTION, 0},
-  {"cons", 2, RULE_CONS, OP_CONS, OP_LIST, 0},
   {"pack", 2, RULE_PACK, OP_PACK, OP_NAT, 0},
   {"refl", 0, RULE_REFL, OP_REFL, OP_EQ, 0},
-  {"first", 1, RULE_PART, OP_FIRST, OP_PROD, 0},
-  {"second", 1, RULE_PART, OP_SECOND, OP_PROD, 1},
   {"witness", 1, RULE_SIGMA_PART, OP_WITNESS, OP_NAT, 0},
   {"payload", 1, RULE_SIGMA_PART, OP_PAYLOAD, OP_NAT, 1},
   {"either", 3, RULE_EITHER, OP_EITHER, OP_SUM, 0},
@@ -109,9 +102,7 @@ static const Builtin BUILTINS[] = {
   {"pure", 1, RULE_PURE, OP_PURE, OP_NAT, 0},
   {"map", 2, RULE_MAP, OP_MAP, OP_NAT, 0},
   {"bind", 2, RULE_BIND, OP_BIND, OP_NAT, 0},
-  {"filter", 2, RULE_FILTER, OP_FILTER, OP_NAT, 0},
   {"fold", 2, RULE_FOLD, OP_FOLD_NAT, OP_NAT, 0},
-  {"unfold", 3, RULE_UNFOLD, OP_UNFOLD, OP_LIST, 0},
   {"symm", 1, RULE_SYMM, OP_SYMM, OP_EQ, 0},
   {"trans", 2, RULE_TRANS, OP_TRANS, OP_EQ, 0},
   {"cong", 2, RULE_CONG, OP_CONG, OP_EQ, 0},
@@ -119,15 +110,16 @@ static const Builtin BUILTINS[] = {
   {"natAdd", 2, RULE_NAT2, OP_NAT_ADD, OP_NAT, 0},
   {"natSub", 2, RULE_NAT2, OP_NAT_SUB, OP_NAT, 0},
   {"natMul", 2, RULE_NAT2, OP_NAT_MUL, OP_NAT, 0},
-  {"natEq", 2, RULE_NAT2, OP_NAT_EQ, OP_FLAG, 0},
-  {"natLe", 2, RULE_NAT2, OP_NAT_LE, OP_FLAG, 0},
-  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_FLAG, 0}
+  {"natEq", 2, RULE_NAT2, OP_NAT_EQ, OP_BOOL, 0},
+  {"natLe", 2, RULE_NAT2, OP_NAT_LE, OP_BOOL, 0},
+  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_BOOL, 0}
 };
 
 #define BUILTIN_COUNT ((uint32_t)(sizeof BUILTINS / sizeof BUILTINS[0]))
 
-/* Names that no declaration can take (rule R4). */
-static const char *const RESERVED[] = {"Bool", "Text"};
+/* Names that no declaration can take (rule R4). List, nil and cons: no
+   cons list (rule R1). */
+static const char *const RESERVED[] = {"Text", "List", "nil", "cons"};
 
 typedef enum {
   HEAD_TERM, /* a local, a definition or another term: plain application */
@@ -248,8 +240,8 @@ static const Value *nat_type(Checker *c) {
   return tyop(c, OP_NAT, 0, NULL, NULL, NULL);
 }
 
-static const Value *flag_type(Checker *c) {
-  return tyop(c, OP_FLAG, 0, NULL, NULL, NULL);
+static const Value *bool_type(Checker *c) {
+  return tyop(c, OP_BOOL, 0, NULL, NULL, NULL);
 }
 
 /* The value of the core term K in the current context. */
@@ -452,7 +444,7 @@ static const Core *need_type(Call *k, const char *what) {
 }
 
 static const Core *not_carrier(Call *k, const Value *type) {
-  return nul(FAIL(k->c, "TYPE_MISMATCH", "%s needs a value of type Option A, List A or Sum E A, found a term of type %s", k->b->name, show(k->c, type)));
+  return nul(FAIL(k->c, "TYPE_MISMATCH", "%s needs a value of type Option A or Sum E A, found a term of type %s", k->b->name, show(k->c, type)));
 }
 
 static const Core *infer_eq(Call *k, uint32_t i, const Value **type) {
@@ -621,7 +613,7 @@ static const Core *rule_pure(Call *k) {
   Carrier carrier = CARRIER_OPTION;
   const Value *a = NULL;
   if (!carrier_of(k->hint, &carrier, &a))
-    return need_type(k, "Option A, List A or Sum E A");
+    return need_type(k, "Option A or Sum E A");
   k->type = k->hint;
   return op3(k->c, OP_PURE, carrier, 1, check(k->c, k->args[0], a), NULL, NULL);
 }
@@ -684,7 +676,7 @@ static const Core *rule_filter(Call *k) {
     return NULL;
   if (!carrier_of(mt, &carrier, &a) || carrier == CARRIER_SUM)
     return nul(FAIL(c, "TYPE_MISMATCH", "filter needs a value of type Option A or List A, found a term of type %s", show(c, mt)));
-  p = check(c, k->args[0], val_arrow(c->m, a, flag_type(c)));
+  p = check(c, k->args[0], val_arrow(c->m, a, bool_type(c)));
   k->type = mt;
   return op3(c, OP_FILTER, carrier, 2, p, x, NULL);
 }
@@ -764,7 +756,7 @@ static const Core *rule_fold(Call *k) {
     return fold_simple(k, s, st);
   }
   s = infer(c, k->args[k->argc - 1u], &st);
-  return s == NULL ? NULL : nul(FAIL(c, "TYPE_MISMATCH", "fold needs a last argument of type Nat, List A or a domain family, and one case for each constructor; found %u arguments and a last argument of type %s", k->argc, show(c, st)));
+  return s == NULL ? NULL : nul(FAIL(c, "TYPE_MISMATCH", "fold needs a last argument of type Nat or a domain data type, and one case for each constructor; found %u arguments and a last argument of type %s", k->argc, show(c, st)));
 }
 
 /* unfold g limit seed, with g : S -> Option (Prod A S). */
@@ -857,7 +849,7 @@ static const Core *rule_nat2(Call *k) {
 static const Core *rule_flag_if(Call *k) {
   Checker *c = k->c;
   const Value *res = k->hint;
-  const Core *b = check(c, k->args[0], flag_type(c));
+  const Core *b = check(c, k->args[0], bool_type(c));
   const Core *yes = b == NULL ? NULL : (res != NULL ? check(c, k->args[1], res) : infer(c, k->args[1], &res));
   const Core *no = yes == NULL ? NULL : check(c, k->args[2], res);
   k->type = res;
@@ -1031,15 +1023,51 @@ static int find_known(Checker *c, const char *name, Head *h) {
   return 0;
 }
 
-/* An unknown name. When it names this declaration or a later one, the use
-   is recursion (rule R3). */
-static int unknown_name(Checker *c, const char *name) {
+/* Core names that S1 removed. FIX is the name that replaces it, or NULL
+   when no name does; HINT goes into the message. */
+typedef struct {
+  const char *name;
+  const char *fix;
+  const char *hint;
+} Dropped;
+
+static const Dropped DROPPED[] = {
+  {"Flag", "Bool", "use Bool"},
+  {"flagYes", "true", "use true"},
+  {"flagNo", "false", "use false"},
+  {"Prod", NULL, "write the product of A and B as A × B"},
+  {"pair", "pack", "use pack (a term of A × B is pack a b)"},
+  {"first", "witness", "use witness"},
+  {"second", "payload", "use payload"},
+  {"List", NULL, "no cons list (rule R1); FreeMon of domain/domain.lang comes at S2"},
+  {"nil", NULL, "no cons list (rule R1); FreeMon of domain/domain.lang comes at S2"},
+  {"cons", NULL, "no cons list (rule R1); FreeMon of domain/domain.lang comes at S2"},
+  {"filter", NULL, "no core name replaces it"},
+  {"unfold", NULL, "no core name replaces it before S2"}
+};
+
+/* An unknown name at HEAD. When it names this declaration or a later one,
+   the use is recursion (rule R3). The span is the name; main.c adds the
+   file. */
+static int unknown_name(Checker *c, const Term *head) {
+  const char *name = head->name;
+  const Dropped *drop = NULL;
+  const char *p;
+  int width = 0;
   size_t i;
+  Span span;
   for (i = c->decl_index; i < c->decls->count; i++) {
     if (strcmp(c->decls->items[i].name, name) == 0)
       return FAIL(c, "REFUSE_REC", "%s is this definition or a later one; a definition can use only earlier ones (rule R3)", name);
   }
-  return FAIL(c, "NAME_UNKNOWN", "unknown name %s", name);
+  for (i = 0; i < sizeof DROPPED / sizeof DROPPED[0]; i++) {
+    if (drop == NULL && strcmp(DROPPED[i].name, name) == 0) drop = &DROPPED[i];
+  }
+  for (p = name; *p != '\0'; p++) width += ((unsigned char)*p & 0xC0u) != 0x80u;
+  span = (Span){NULL, head->line, head->col, head->line, head->col + width};
+  if (drop == NULL)
+    return diag_fail_at(c->m->diag, "NAME_UNKNOWN", c->m->def, span, NULL, name, NULL, "unknown name %s", name);
+  return diag_fail_at(c->m->diag, "NAME_UNKNOWN", c->m->def, span, drop->fix, name, drop->fix, "unknown name %s (S1 removed it); %s", name, drop->hint);
 }
 
 /* Name resolution order: locals (the innermost first), definitions,
@@ -1049,7 +1077,7 @@ static int resolve_head(Checker *c, const Term *head, Head *h) {
   h->kind = HEAD_TERM;
   if (head->kind != TERM_VAR || find_local(c, head->name) != NULL || find_def(c->m, head->name) != NO_DEF)
     return 1;
-  return find_known(c, head->name, h) ? 1 : unknown_name(c, head->name);
+  return find_known(c, head->name, h) ? 1 : unknown_name(c, head);
 }
 
 static uint32_t known_arity(const Checker *c, const Head *h) {
@@ -1325,6 +1353,84 @@ static int name_free(Checker *c, const char *name) {
 
 /* A recursive field must be the whole field type, in a family with no
    parameters. */
+/* Rule R1 (PLAN 2.1): a family with a type parameter is a cell monad.
+   Ported from intent-lang 67445ae and resolve-lang 632d819 (cell_header,
+   cell_field, cell_generators) without paths, type indices and and
+   blocks, which the kit does not have. Each parameter is a universe, each
+   type parameter is the one field of exactly one generator constructor,
+   and every other field is closed data. A recursive field gets
+   DOMAIN_FAMILY first (a kit HOST-LIMIT). */
+static int cell_type_argument(const Core *t) {
+  while (t->kind == CORE_PI)
+    t = t->b;
+  return t->kind == CORE_UNIV;
+}
+
+static int has_type_param(const FamilyInfo *f) {
+  uint32_t k;
+  for (k = 0; k < f->param_count; k++)
+    if (cell_type_argument(f->param_types[k]))
+      return 1;
+  return 0;
+}
+
+/* The type parameter that T is, or the parameter count when T is not one. */
+static uint32_t cell_param(const FamilyInfo *f, const Core *t) {
+  uint32_t p = f->param_count;
+  uint32_t k = t->kind == CORE_VAR && t->index < p ? p - 1u - t->index : p;
+  return k < p && f->param_types[k]->kind == CORE_UNIV ? k : p;
+}
+
+static int cell_header(Checker *c, const Decl *d, const FamilyInfo *f) {
+  uint32_t k;
+  for (k = 0; has_type_param(f) && k < f->param_count; k++)
+    if (f->param_types[k]->kind != CORE_UNIV)
+      return FAIL(c, "REFUSE_CELL", "%s has a type argument and the parameter %s is not a universe; a cell signature has only type parameters (rule R1)", f->name, d->params[k].name);
+  return 1;
+}
+
+/* Closed data cannot use a type parameter. Binders inside the type still
+   bind their own variables. */
+static int cell_closed(const Core *t, uint32_t depth) {
+  uint32_t i;
+  int binder;
+  if (t == NULL)
+    return 1;
+  if (t->kind == CORE_VAR)
+    return t->index < depth;
+  binder = t->kind == CORE_PI || t->kind == CORE_SIGMA || t->kind == CORE_LAM;
+  if (!cell_closed(t->a, depth) || !cell_closed(t->b, depth + (uint32_t)binder))
+    return 0;
+  for (i = 0; i < t->argc; i++)
+    if (!cell_closed(t->args[i], depth))
+      return 0;
+  return 1;
+}
+
+static int cell_field(Checker *c, const FamilyInfo *f, const FieldInfo *out, size_t field_count) {
+  if (cell_param(f, out->type) < f->param_count)
+    return field_count == 1u ? 1 : FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the field %s has a type parameter as its type, so it must be the one field of its constructor (rule R1)", f->name, out->name);
+  if (cell_closed(out->type, 0u))
+    return 1;
+  return FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the field %s must be a type parameter or closed data (rule R1)", f->name, out->name);
+}
+
+/* Each type parameter has exactly one generator. */
+static int cell_generators(Checker *c, const Decl *d, const FamilyInfo *f) {
+  const Machine *m = c->m;
+  uint32_t k, i;
+  for (k = 0; k < f->param_count; k++) {
+    uint32_t gens = 0;
+    for (i = 0; i < f->ctor_count; i++)
+      gens += m->ctors[f->first_ctor + i].field_count == 1u && cell_param(f, m->ctors[f->first_ctor + i].fields[0].type) == k;
+    if (gens == 0u)
+      return FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the type parameter %s occurs in no constructor (rule R1)", f->name, d->params[k].name);
+    if (gens > 1u)
+      return FAIL(c, "REFUSE_CELL", "%s is not a cell signature: the type parameter %s has %u generators (rule R1)", f->name, d->params[k].name, (unsigned)gens);
+  }
+  return 1;
+}
+
 static int check_field(Checker *c, uint32_t fam, const Field *field, FieldInfo *out) {
   uint64_t level = 0;
   const Core *t;
@@ -1365,6 +1471,11 @@ static int check_ctor(Checker *c, uint32_t fam, const Ctor *ctor) {
         return FAIL(c, "REFUSE_NAME", "%s is already a field of this constructor (rule R4)", name);
     if (!check_field(c, fam, &ctor->fields[j], &fields[j]))
       return 0;
+    if (has_type_param(&m->families[fam])) {
+      fields[j].type = quote_value(m, c->level, here(c, fields[j].type));
+      if (fields[j].type == NULL || !cell_field(c, &m->families[fam], &fields[j], ctor->field_count))
+        return 0;
+    }
   }
   ci->name = ctor->name;
   ci->family = fam;
@@ -1385,8 +1496,11 @@ static int check_family(Checker *c, const Decl *d) {
     return FAIL(c, "OOM", "out of memory");
   for (i = 0; i < d->param_count; i++) {
     uint64_t level = 0;
-    params[i] = check_type(c, d->params[i].type, &level);
-    if (!push(c, d->params[i].name, here(c, params[i])))
+    const Value *type = here(c, check_type(c, d->params[i].type, &level));
+    /* R1 inspects normal forms, so an alias cannot hide a type argument.
+       Quote before pushing this parameter to preserve its context. */
+    params[i] = quote_value(m, c->level, type);
+    if (params[i] == NULL || !push(c, d->params[i].name, type))
       return 0;
   }
   f->name = d->name;
@@ -1394,13 +1508,15 @@ static int check_family(Checker *c, const Decl *d) {
   f->param_count = (uint32_t)d->param_count;
   f->first_ctor = m->ctor_count;
   f->ctor_count = (uint32_t)d->ctor_count;
+  if (!cell_header(c, d, f))
+    return 0;
   m->family_count++;
   c->self = fam;
   for (i = 0; i < d->ctor_count; i++) {
     if (!check_ctor(c, fam, &d->ctors[i]))
       return 0;
   }
-  return 1;
+  return !has_type_param(f) || cell_generators(c, d, f);
 }
 
 static int check_def(Checker *c, const Decl *d) {
@@ -1423,11 +1539,11 @@ static int check_def(Checker *c, const Decl *d) {
 
 static int check_decl(Checker *c, const Decl *d) {
   if (d->kind == DECL_FAMILY && d->origin == ORIGIN_PROGRAM)
-    return FAIL(c, "REFUSE_DATA", "a program cannot declare a family (rule R1); only domain/domain.lang can");
+    return FAIL(c, "REFUSE_DATA", "a program cannot declare a data type (rule R1); only domain/domain.lang can");
   if (d->kind == DECL_AXIOM)
     return FAIL(c, "REFUSE_AXIOM", "an axiom has no proof (rule R2)");
   if (d->is_rec)
-    return FAIL(c, "REFUSE_REC", "def rec is refused (rule R3); use fold or unfold");
+    return FAIL(c, "REFUSE_REC", "a rec declaration is refused (rule R3); use fold");
   if (!name_free(c, d->name))
     return 0;
   return d->kind == DECL_FAMILY ? check_family(c, d) : check_def(c, d);
@@ -1462,10 +1578,14 @@ int check_program(Arena *arena, const DeclList *decls, Machine *m, Diag *diag) {
     c.depth = 0;
     c.self = NO_FAMILY;
     m->def = decls->items[i].name;
+    m->checked = i;
+    m->decl_failed = 1;
     if (!check_decl(&c, &decls->items[i]))
       return 0;
   }
   m->def = NULL;
+  m->checked = decls->count;
+  m->decl_failed = 0;
   return 1;
 }
 
@@ -1473,14 +1593,14 @@ int entry_of(Machine *m, const Value *type, Entry *out) {
   const Value *t = type;
   memset(out, 0, sizeof *out);
   while (t != NULL && t->kind == VAL_PI && out->param_count < ENTRY_PARAMS_MAX) {
-    if (!val_is(t->dom, OP_NAT) && !val_is(t->dom, OP_FLAG))
+    if (!val_is(t->dom, OP_NAT) && !val_is(t->dom, OP_BOOL))
       return 0;
-    out->param_flag[out->param_count] = val_is(t->dom, OP_FLAG);
+    out->param_bool[out->param_count] = val_is(t->dom, OP_BOOL);
     t = closure_apply(m, t, val_var(m, out->param_count));
     out->param_count++;
   }
-  out->result_flag = val_is(t, OP_FLAG);
-  return val_is(t, OP_NAT) || val_is(t, OP_FLAG);
+  out->result_bool = val_is(t, OP_BOOL);
+  return val_is(t, OP_NAT) || val_is(t, OP_BOOL);
 }
 
 static int parse_u64(const char *s, uint64_t *out) {
@@ -1498,14 +1618,14 @@ static int parse_u64(const char *s, uint64_t *out) {
   return 1;
 }
 
-/* An entry argument: a Nat in decimal, or a Flag as 0 or 1. */
-static const Value *entry_arg(Machine *m, const char *text, int is_flag) {
+/* An entry argument: a Nat in decimal, or a Bool as 0 or 1. */
+static const Value *entry_arg(Machine *m, const char *text, int is_bool) {
   uint64_t n = 0;
-  if (!parse_u64(text, &n) || (is_flag && n > 1u)) {
-    diag_fail(m->diag, "EVAL_ARGS", m->def, "'%s' is not a %s", text, is_flag ? "Flag (0 or 1)" : "Nat (0 to 2^64-1)");
+  if (!parse_u64(text, &n) || (is_bool && n > 1u)) {
+    diag_fail(m->diag, "EVAL_ARGS", m->def, "'%s' is not a %s", text, is_bool ? "Bool (0 or 1)" : "Nat (0 to 2^64-1)");
     return NULL;
   }
-  return is_flag ? val_make(m, n == 1u ? OP_FLAG_YES : OP_FLAG_NO, 0, 0, NULL, NULL, NULL) : val_nat(m, n);
+  return is_bool ? val_make(m, n == 1u ? OP_TRUE : OP_FALSE, 0, 0, NULL, NULL, NULL) : val_nat(m, n);
 }
 
 static int print_result(Machine *m, const char *name, const Value *v, FILE *out, FILE *err) {
@@ -1518,8 +1638,8 @@ static int print_result(Machine *m, const char *name, const Value *v, FILE *out,
     fprintf(err, "langc: EVAL_OVERFLOW: %s: a Nat operation overflowed past 2^64-1\n", name);
     return 0;
   case VAL_OP:
-    if (val_is(v, OP_FLAG_YES) || val_is(v, OP_FLAG_NO)) {
-      fprintf(out, "%d\n", val_is(v, OP_FLAG_YES));
+    if (val_is(v, OP_TRUE) || val_is(v, OP_FALSE)) {
+      fprintf(out, "%d\n", val_is(v, OP_TRUE));
       return 0;
     }
     break;
@@ -1570,7 +1690,7 @@ int eval_command(Machine *m, const char *name, char *const *args, int arg_count,
     return 2;
   }
   for (i = 0; i < entry.param_count && v != NULL; i++) {
-    const Value *arg = entry_arg(m, args[i], entry.param_flag[i]);
+    const Value *arg = entry_arg(m, args[i], entry.param_bool[i]);
     v = arg == NULL ? NULL : apply_value(m, v, arg);
   }
   if (v == NULL)

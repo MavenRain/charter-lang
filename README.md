@@ -7,12 +7,18 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S0)
+## Status (S1)
 
-S0 is the seed. The tcc-wasm kit pipeline of lang-template works: parse,
-check, IR, Wasm and the differential test, on the kit sample domain. The
-design and the plan are written. There is no charter-lang domain code
-yet. `make check` passes. `docs/PLAN.md` section 9 gives the slices.
+S1 is built. The front end has the leaf-lang surface. `langc fmt` prints
+the one canonical form, and `langc check --json` gives a JSON diagnostic
+with a fix hint and the counts parsed and typed (the law count comes at
+S2). Rule R1 is enforced: a domain family is a cell signature or it gets
+`REFUSE_CELL`, and a program cannot declare data (`REFUSE_DATA`).
+`domain/domain.lang` has the base data: the enums `DecE`, `BallotA`,
+`DecA` and `Bit`, `Address`, the asset structure `CMon` and the records
+`Voucher M` and `Claim M`. The kit `Stack` and `Tree` stay as regression
+subjects until S2. The escrow operations, the laws and all crypto are
+not built. `make check` passes. `docs/PLAN.md` section 9 gives the slices.
 
 ## When to reach for charter-lang
 

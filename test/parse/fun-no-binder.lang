@@ -1,1 +1,2 @@
-def f : Nat -> Nat := fun => 1
+f : ℕ → ℕ
+f = λ → 1

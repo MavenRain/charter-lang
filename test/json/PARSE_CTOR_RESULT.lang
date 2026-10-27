@@ -1,0 +1,3 @@
+-- A constructor type must end in the data type.
+data Coin : Type where
+  heads : ℕ

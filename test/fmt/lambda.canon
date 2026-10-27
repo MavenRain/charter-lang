@@ -1,0 +1,9 @@
+-- A bare lambda body prints as a clause; \ and fun => print as λ.
+succ : ℕ → ℕ
+succ n = natAdd n 1
+
+add : ℕ → ℕ → ℕ
+add a b = natAdd a b
+
+shift : ℕ → ℕ
+shift = λ (k : ℕ) → natAdd k 2

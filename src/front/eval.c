@@ -9,10 +9,10 @@
 #define VARIES 0xffu
 
 static const char *const OP_NAMES[] = {
-  [OP_NAT] = "Nat", [OP_FLAG] = "Flag", [OP_UNIT] = "Unit", [OP_PROD] = "Prod",
+  [OP_NAT] = "Nat", [OP_BOOL] = "Bool", [OP_UNIT] = "Unit", [OP_PROD] = "Prod",
   [OP_SUM] = "Sum", [OP_OPTION] = "Option", [OP_LIST] = "List", [OP_EQ] = "Eq",
-  [OP_FAMILY] = "?", [OP_UNIT_VAL] = "unit", [OP_FLAG_YES] = "flagYes",
-  [OP_FLAG_NO] = "flagNo", [OP_PAIR] = "pair", [OP_INL] = "inl", [OP_INR] = "inr",
+  [OP_FAMILY] = "?", [OP_UNIT_VAL] = "unit", [OP_TRUE] = "true",
+  [OP_FALSE] = "false", [OP_PAIR] = "pair", [OP_INL] = "inl", [OP_INR] = "inr",
   [OP_NONE] = "none", [OP_SOME] = "some", [OP_NIL] = "nil", [OP_CONS] = "cons",
   [OP_PACK] = "pack", [OP_REFL] = "refl", [OP_CTOR] = "?", [OP_FIRST] = "first",
   [OP_SECOND] = "second", [OP_EITHER] = "either", [OP_OPTION_ELIM] = "option",
@@ -28,9 +28,9 @@ static const char *const OP_NAMES[] = {
 /* The number of arguments of each operation. VARIES: it comes from the
    family tables. */
 static const unsigned char OP_ARITY[] = {
-  [OP_NAT] = 0, [OP_FLAG] = 0, [OP_UNIT] = 0, [OP_PROD] = 2, [OP_SUM] = 2,
+  [OP_NAT] = 0, [OP_BOOL] = 0, [OP_UNIT] = 0, [OP_PROD] = 2, [OP_SUM] = 2,
   [OP_OPTION] = 1, [OP_LIST] = 1, [OP_EQ] = 3, [OP_FAMILY] = VARIES,
-  [OP_UNIT_VAL] = 0, [OP_FLAG_YES] = 0, [OP_FLAG_NO] = 0, [OP_PAIR] = 2,
+  [OP_UNIT_VAL] = 0, [OP_TRUE] = 0, [OP_FALSE] = 0, [OP_PAIR] = 2,
   [OP_INL] = 1, [OP_INR] = 1, [OP_NONE] = 0, [OP_SOME] = 1, [OP_NIL] = 0,
   [OP_CONS] = 2, [OP_PACK] = 2, [OP_REFL] = 0, [OP_CTOR] = VARIES, [OP_FIRST] = 1,
   [OP_SECOND] = 1, [OP_EITHER] = 3, [OP_OPTION_ELIM] = 3, [OP_PURE] = 1,
@@ -167,7 +167,7 @@ static const Value *constant(Machine *m, Op op) {
 }
 
 static const Value *flag(Machine *m, int yes) {
-  return constant(m, yes ? OP_FLAG_YES : OP_FLAG_NO);
+  return constant(m, yes ? OP_TRUE : OP_FALSE);
 }
 
 const Value *val_arrow(Machine *m, const Value *dom, const Value *cod) {
@@ -635,7 +635,7 @@ static const Value *filter_option(Machine *m, const Value *const *a, uint32_t n)
     return NULL;
   if (blocked(m, test, OP_FILTER, CARRIER_OPTION, 0, a, n, &out))
     return out;
-  return val_is(test, OP_FLAG_YES) ? a[1] : constant(m, OP_NONE);
+  return val_is(test, OP_TRUE) ? a[1] : constant(m, OP_NONE);
 }
 
 static const Value *filter_list(Machine *m, const Value *const *a) {
@@ -658,7 +658,7 @@ static const Value *filter_list(Machine *m, const Value *const *a) {
     case SCRUT_VALUE:
       break;
     }
-    if (val_is(test, OP_FLAG_YES) && !buf_push(m, &kept, s.cells[i]->args[0]))
+    if (val_is(test, OP_TRUE) && !buf_push(m, &kept, s.cells[i]->args[0]))
       return NULL;
   }
   return build_list(m, kept.items, kept.count, list_tail(m, s.tail, OP_FILTER, CARRIER_LIST, a[0]));
@@ -746,11 +746,11 @@ static const Value *reduce_flag_if(Machine *m, const Value *const *a, uint32_t n
   const Value *out;
   if (blocked(m, a[0], OP_FLAG_IF, 0, 0, a, n, &out))
     return out;
-  if (val_is(a[0], OP_FLAG_YES))
+  if (val_is(a[0], OP_TRUE))
     return a[1];
-  if (val_is(a[0], OP_FLAG_NO))
+  if (val_is(a[0], OP_FALSE))
     return a[2];
-  return internal(m, "a flagIf of a value that is not a Flag");
+  return internal(m, "a flagIf of a value that is not a Bool");
 }
 
 static const Value *reduce_proj(Machine *m, uint32_t inst, uint32_t field, const Value *const *a, uint32_t n) {
@@ -790,7 +790,7 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
     return internal(m, "an operation with the wrong number of arguments");
   switch (op) {
   case OP_NAT:
-  case OP_FLAG:
+  case OP_BOOL:
   case OP_UNIT:
   case OP_PROD:
   case OP_SUM:
@@ -799,8 +799,8 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_EQ:
   case OP_FAMILY:
   case OP_UNIT_VAL:
-  case OP_FLAG_YES:
-  case OP_FLAG_NO:
+  case OP_TRUE:
+  case OP_FALSE:
   case OP_PAIR:
   case OP_INL:
   case OP_INR:

@@ -551,8 +551,8 @@ static const char *scalar_word(IrScalar s) {
   switch (s) {
   case IR_SCALAR_NAT:
     return "nat";
-  case IR_SCALAR_FLAG:
-    return "flag";
+  case IR_SCALAR_BOOL:
+    return "bool";
   }
   return "?";
 }
@@ -627,7 +627,7 @@ static int lower_ctor(Low *l, Buf *b, const Value *v, Operand *out) {
 static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   switch (v->op) {
   case OP_NAT:
-  case OP_FLAG:
+  case OP_BOOL:
   case OP_UNIT:
   case OP_PROD:
   case OP_SUM:
@@ -636,10 +636,10 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_EQ:
   case OP_FAMILY:
   case OP_UNIT_VAL:
-  case OP_FLAG_NO:
+  case OP_FALSE:
   case OP_REFL:
     return give(l, out, 0, 0);
-  case OP_FLAG_YES:
+  case OP_TRUE:
     return give(l, out, 1, 0);
   case OP_PAIR:
   case OP_PACK:
@@ -1172,7 +1172,7 @@ static int transport(Low *l, Buf *b, const Value *v, Operand *out) {
 static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   switch (v->op) {
   case OP_NAT:
-  case OP_FLAG:
+  case OP_BOOL:
   case OP_UNIT:
   case OP_PROD:
   case OP_SUM:
@@ -1181,8 +1181,8 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_EQ:
   case OP_FAMILY:
   case OP_UNIT_VAL:
-  case OP_FLAG_YES:
-  case OP_FLAG_NO:
+  case OP_TRUE:
+  case OP_FALSE:
   case OP_PAIR:
   case OP_INL:
   case OP_INR:
@@ -1306,7 +1306,7 @@ static int lower_entry(Machine *m, uint32_t index, const Entry *e, IrFunc *fn) {
     return oom(&l);
   v = def_value(m, index);
   for (k = 0; k < e->param_count && v != NULL; k++) {
-    params[k] = e->param_flag[k] ? IR_SCALAR_FLAG : IR_SCALAR_NAT;
+    params[k] = e->param_bool[k] ? IR_SCALAR_BOOL : IR_SCALAR_NAT;
     x = fresh(&l, operand(ex_local(&l, k), ex_const(&l, 0)));
     v = x == NULL ? NULL : apply_value(m, v, x);
   }
@@ -1316,7 +1316,7 @@ static int lower_entry(Machine *m, uint32_t index, const Entry *e, IrFunc *fn) {
   fn->name = m->defs[index].name;
   fn->params = params;
   fn->param_count = e->param_count;
-  fn->result = e->result_flag ? IR_SCALAR_FLAG : IR_SCALAR_NAT;
+  fn->result = e->result_bool ? IR_SCALAR_BOOL : IR_SCALAR_NAT;
   fn->local_count = l.local_count;
   fn->body = block_of(&body);
   return 1;

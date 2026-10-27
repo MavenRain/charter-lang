@@ -1,7 +1,7 @@
 /* The first-order IR between the front end and a target. SHARED by the tcc
    kits.
 
-   Each value is one unsigned 64-bit word: a Nat, a Flag (0 or 1), a
+   Each value is one unsigned 64-bit word: a Nat, a Bool (0 or 1), a
    constructor tag, or a heap address. Locals are numbered from 0. The
    parameters of an entry are locals 0 to param_count - 1. A heap block is a
    run of words. A target sets its own word width in memory (Wasm: 8 bytes,
@@ -21,7 +21,7 @@
 
 typedef enum {
   IR_SCALAR_NAT,
-  IR_SCALAR_FLAG
+  IR_SCALAR_BOOL
 } IrScalar;
 
 typedef enum {

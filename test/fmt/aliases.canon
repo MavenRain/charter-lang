@@ -1,0 +1,12 @@
+-- ASCII aliases: Nat, ->, * and Sigma.
+twice : (f : ℕ → ℕ) → ℕ → ℕ
+twice f x = f (f x)
+
+apply : (ℕ → ℕ) → ℕ
+apply g = g 1
+
+pair : ℕ × ℕ
+pair = pack 1 2
+
+dep : (n : ℕ) × ℕ
+dep = pack 0 5
