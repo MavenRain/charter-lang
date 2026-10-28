@@ -7,13 +7,26 @@ there. Delete the quoted line when the section is complete.
 
 ## 1. Purpose
 
-> Write here: what one program describes, what the compiler checks, and what
-> it writes. Name the host and the target. Say that the core types and core
-> operations are only those of `design/DESIGN.md`.
+This section says what one program describes, what the compiler checks and
+what the compiler writes. It names the host and the targets.
 
-charter-lang is a language for <the domain>. Its type formers are F1 to F15 of
-`formers/FORMERS.md`. Its core data types and core operations are only the
+A charter-lang program describes a part of the Off-Chain EscrowDAO note (the
+note): the constitution `kappa`, the escrow state, the 10 operations and
+their laws, in the clear meaning. The constitution can amend itself, thus
+the name. `build/langc` checks a program against the rulings R1 to R7 of
+`docs/PLAN.md` section 1. Each type constructor is a cell monad or a cocell
+comonad, as Cubical Type Theory represents them (R1). Each base type and
+operation is one that the note needs (R2). The type formers are F1 to F15 of
+`formers/FORMERS.md`. The core data types and core operations are only the
 types and operations of `design/DESIGN.md` (the design).
+
+The host is TinyCC (R3, section 8). The targets are Wasm for the client, the
+member node and the public verifier, a ZK circuit IR and an FHE circuit IR
+(R4, section 7). There is no native C target and no EVM target. The crypto
+layer is concrete in v1: FHE, a PLONKish proof system, FROST threshold
+signatures and Poseidon (R5, `docs/PLAN.md` section 4). The meaning ends at
+the rail. A voucher is data only, and the compiler writes no rail verifier
+(R6). R7 gives the agent items of `docs/PLAN.md` section 7.
 
 ## 2. Programs
 
@@ -197,28 +210,44 @@ refused as a run-time `ind`.
 
 ## 3. Type formers
 
-> Write here: only the deviations from the formers. Do not copy the forms.
-> Give each former whose status in `formers/tcc-wasm.md` is not DONE, and the
-> open item (section 9) that records it.
+This section gives only the deviations from the formers: each former whose
+status in `formers/tcc-wasm.md` is not DONE, and the open item (section 9)
+that records it. It does not copy the forms.
 
 The type formers are F1 to F15 of `formers/FORMERS.md`. This language uses
 the tcc-wasm column of the realization matrix. `formers/tcc-wasm.md` gives
-the host form of each former.
+the host form of each former. Rule R1 (`docs/PLAN.md` section 2) admits a
+type constructor only as a cell monad (CM) or a cocell comonad (CC). Only
+`domain/domain.lang` declares a family. A program that declares one gets
+`REFUSE_DATA`, and a domain family that is not a cell signature or a free
+monoid gets `REFUSE_CELL`.
 
 | ID | Status on tcc-wasm | Effect on this language | Open item |
 |---|---|---|---|
-| | | | |
+| F4 | PLANNED: no program name since S1 | A program cannot name `List`, `nil` or `cons` (`REFUSE_NAME`). The domain `FreeMon A` with `fmNil` and `fmCons` replaces it. | O9; Q-S2a-2 (a) |
+| F7 | PLANNED: no program name since S1 | No `unfold`. The note has no coinductive data, and `docs/PLAN.md` 3.3 excludes coinductive streams. | none: an exclusion of `docs/PLAN.md` 3.3 |
+| F8 | PLANNED: no program name since S1 | No `filter`. No note line needs one, and no core name replaces it. A removal from a keyed map is `nmapDel`. | none |
+| F15 | PARTIAL: only the domain file can declare an indexed data type | The domain declares no indexed family at S2d. `Tally n` is an iterated Sigma, not a family. The base types `CtA e` to `SigShare e`, indexed by the epoch value, are open. | Q3 (S5) |
 
 ## 4. Structures
 
-> Write here: the carriers of Monad (F5), fold and unfold (F6, F7) and
-> filter (F8) that the design uses. Name each carrier that the host does not
-> give.
+This section gives the carriers of Monad (F5), fold and unfold (F6, F7) and
+filter (F8) that the design uses. It names each carrier that the host does
+not give.
 
-- **Monad**: `pure`, `map`, `bind` on <carriers>.
-- **Algebra**: `fold` on <carriers>. `unfold` on <carriers>, or the reason
-  that there is no `unfold`.
-- **Filterable**: `filter` on <carriers>.
+- **Monad**: `tRet` (pure) and `tBind` (bind) on the partial writer
+  `T M Z = Option (Z × FreeMon (Voucher M))` (Q5, Q-S2b-2), with the
+  Kleisli laws in `examples/kappa.lang`. The domain has no separate `map`.
+- **Algebra**: `fold` (F6) on `FreeMon A`: `fmAppend`, the sums over a
+  finite support and the transcript fold `tSem` (L287). The dependent `ind`
+  on `ℕ`, on the host `Option` and on each domain family (section 2.7) gives
+  the proofs and `faultBound`. There is no `unfold` (F7): the note has no
+  coinductive data (`docs/PLAN.md` 3.3).
+- **Filterable**: there is no `filter` (F8). No note line needs one.
+- The host does not give `FreeMon` and `T`. `domain/domain.lang` defines
+  both: `FreeMon A` is a domain family, and `T` is a composite of the host
+  `Option` and `FreeMon`. The host gives Pi, Sigma, `ℕ`, `Bool` and
+  `Option`.
 
 ## 5. Core types
 
@@ -278,21 +307,53 @@ first, and the Type column starts after it. A result `none` of
 
 ## 7. Target and instance encoding
 
-> Write here: what the compiler writes. For a JSON target, give the instance
-> rule and the encoding table. For a contract target, give the storage, the
-> entries and the guards. Say how each proof erases.
+This section says what the compiler writes and how each proof erases.
+charter-lang has no JSON target and no contract target (R4).
+
+`build/langc build FILE -o OUT` writes one Wasm 1.0 module (`src/wasm.c`).
+The module has no import section. Function 0 is a bump allocator, and each
+IR entry is an `i64` export (`design/DESIGN.md` 3.2). TinyCC has no Wasm
+back end, thus `build/langc` writes each byte. The gate runs `wasm-validate`
+on each module and a differential against `langc eval` (`test/gate.sh`).
+At S2d the module comes from the kit IR, with the ops ADD, SUB, MUL, EQ,
+LE, ADD_CARRY, MUL_CARRY and OR. S3 writes the Wasm for the clear meaning
+of the domain, with the client and node entry points. The FHE circuit IR
+(S5) and the ZK circuit IR (S7) are planned (`docs/PLAN.md` 5.2 and 5.3).
 
 An instance is a top-level definition whose type is a data type (F14).
 
 | Type | Encoding |
 |---|---|
-| | |
+| `ℕ` | an `i64`. Wasm `i64` arithmetic wraps mod 2^64, thus `A = ℕ` has a 64-bit bound at the target points (Q8) |
+| `Proof P`, `Sig_e m` | erased: the meaning is a `Trunc` (`docs/PLAN.md` 4.1, L490) |
+| the other domain types | S3 sets the encoding |
 
 ## 8. Host and target
 
-> Write here: the host, its pinned commit (`PIN`), the facts from
-> `probe/CAPABILITY.md` that set the design, and the check that the compiler
-> runs on its output (for example the axiom report).
+This section gives the host, its pinned commit, the probe facts that set
+the design and the checks that the compiler runs on its output.
+
+The host is TinyCC (R3). `PIN` records the commit `mob@0fb54300` (tcc
+0.9.28rc, 2026-09-04, AArch64 Darwin) and the gate tools: node v23.10.0,
+`wasm-validate` and `wasm-objdump` 1.0.39. The kit is `tcc-wasm` of
+lang-template 5265a2a. `docs/PLAN.md` section 8 gives the port sources and
+their SHAs.
+
+`probe/CAPABILITY.md` is the kit template, and its sections are not filled.
+These probe facts set the design:
+- TinyCC has no Wasm back end, thus `build/langc` writes the module bytes
+  (`design/DESIGN.md` 3.2).
+- Wasm `i64` arithmetic wraps mod 2^64 (`design/DESIGN.md` 3.2, Q8).
+- The conversion check has Sigma eta but no `Option` eta (S2b probe), thus
+  `T` is the composite of Q-S2b-2, not the one CM of Q5.
+- The builtins have no division, thus `faultBound` computes `f(n)` by `ind`.
+
+`make check` runs `test/gate.sh` (the parse and check refusals, `langc
+eval`, `wasm-validate` on each module and the differential), then
+`test/review.sh`, `build/fronttool` and `build/checktool`. `langc check`
+refuses `postulate` (`REFUSE_AXIOM`) and `rec` (`REFUSE_REC`) in each file,
+the domain file too (section 2.1). Thus a file that checks has no axiom,
+and the compiler needs no separate axiom report.
 
 ## 9. Open items
 

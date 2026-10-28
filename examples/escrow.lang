@@ -717,6 +717,158 @@ p33Ledger = refl
 p33Spent : Eq (FreeMon ℕ) (stSpent natCMon (exState (semEscrow (depOp 1 2 receiptEx (depOp 3 4 receiptC (fmNil (Op natCMon)))) s0))) (stSpent natCMon (exState (semEscrow (depOp 3 4 receiptC (depOp 1 2 receiptEx (fmNil (Op natCMon)))) s0)))
 p33Spent = refl
 
+-- Prop 3.3 (D73): the rows below compare a view, not the raw state. The
+-- view of a state erases pos and keeps the maps with entry-index keys
+-- (claims, Gamma_E and Gamma_A) as their values in key order. The view of
+-- a result keeps one voucher sum for each of the addresses 1 to 4, so the
+-- positions and the order of the vouchers are erased.
+viewVals : (V : Type 0) → (m : FreeMon (ℕ × V)) → FreeMon V
+viewVals V m = fold (fmNil V) (λ (h : ℕ × V) (acc : FreeMon V) → fmCons V (payload h) acc) m
+
+StView : Type 0
+StView = Kappa × ℕ × Ledger natCMon × Ledger natCMon × FreeMon (Claim natCMon) × FreeMon ℕ × FreeMon (FreeMon (Option DecE)) × FreeMon Motion
+
+stView : (s : St natCMon) → StView
+stView s = pack (stKappa natCMon s) (pack (stEpoch natCMon s) (pack (stLedger natCMon s) (pack (stCredit natCMon s) (pack (viewVals (Claim natCMon) (stClaims natCMon s)) (pack (stSpent natCMon s) (pack (viewVals (FreeMon (Option DecE)) (stGammaE natCMon s)) (viewVals Motion (stGammaA natCMon s))))))))
+
+vAt : (a : ℕ) → (o : FreeMon (Voucher natCMon)) → ℕ
+vAt a o = fold 0 (λ (h : Voucher natCMon) (acc : ℕ) → flagIf (natEq (addressKey (voucherAddress natCMon h)) (addressKey (address a))) (natAdd (voucherAmount natCMon h) acc) acc) o
+
+viewAddrs : FreeMon ℕ
+viewAddrs = fmCons ℕ 1 (fmCons ℕ 2 (fmCons ℕ 3 (fmCons ℕ 4 (fmNil ℕ))))
+
+TView : Type 0
+TView = Option (StView × FreeMon ℕ)
+
+tView : (t : T natCMon (St natCMon)) → TView
+tView t = option none (λ (q : St natCMon × FreeMon (Voucher natCMon)) → some (pack (stView (witness q)) (fold (fmNil ℕ) (λ (a : ℕ) (acc : FreeMon ℕ) → fmCons ℕ (vAt a (payload q)) acc) viewAddrs))) t
+
+tSome : (t : T natCMon (St natCMon)) → Bool
+tSome t = option false (λ (q : St natCMon × FreeMon (Voucher natCMon)) → true) t
+
+tClaims : (t : T natCMon (St natCMon)) → Option (FreeMon (Claim natCMon))
+tClaims t = option none (λ (q : St natCMon × FreeMon (Voucher natCMon)) → some (viewVals (Claim natCMon) (stClaims natCMon (witness q)))) t
+
+tGammaE : (t : T natCMon (St natCMon)) → Option (FreeMon (FreeMon (Option DecE)))
+tGammaE t = option none (λ (q : St natCMon × FreeMon (Voucher natCMon)) → some (viewVals (FreeMon (Option DecE)) (stGammaE natCMon (witness q)))) t
+
+-- The op a, then the op b.
+p33Seq : (a : Op natCMon) → (b : Op natCMon) → FreeMon (Op natCMon)
+p33Seq a b = fmCons (Op natCMon) a (fmCons (Op natCMon) b (fmNil (Op natCMon)))
+
+p33Ab : (a : Op natCMon) → (b : Op natCMon) → (s : St natCMon) → TView
+p33Ab a b s = tView (semEscrow (p33Seq a b) s)
+
+p33On : (a : Op natCMon) → (b : Op natCMon) → (s : St natCMon) → Bool
+p33On a b s = tSome (semEscrow (p33Seq a b) s)
+
+p33Vote : (m : ℕ) → (u : ℕ) → (d : DecE) → Op natCMon
+p33Vote m u d = opVote natCMon (address m) u (voteE d)
+
+p33Wd : (a : ℕ) → (n : ℕ) → Op natCMon
+p33Wd a n = opWithdraw natCMon (address a) n
+
+p33Dep : (p : ℕ) → (q : ℕ) → (r : Receipt natCMon) → Op natCMon
+p33Dep p q r = opDeposit natCMon (address p) (address q) r
+
+receiptD : Receipt natCMon
+receiptD = receipt natCMon 8 15
+
+-- The states of the rows. s1: claim 0 and motion 0 are open. p33S (iT3):
+-- claim 2 is open, the addresses 1 and 2 have credit. p33R: claims 0 to 2
+-- are open, claim 0 has 3 Release ballots. p33V: claim 0 has 2 Release
+-- ballots. p33E: motion 7 on s1 has 4 Adopt ballots.
+p33S : St natCMon
+p33S = exState iT3
+
+p33R : St natCMon
+p33R = exState (semEscrow (iDep (votes3At 0 decRelease (fmNil (Op natCMon)))) s0)
+
+p33V : St natCMon
+p33V = exState (semEscrow (iDep (fmCons (Op natCMon) (p33Vote 1 0 decRelease) (fmCons (Op natCMon) (p33Vote 2 0 decRelease) (fmNil (Op natCMon))))) s0)
+
+p33E : St natCMon
+p33E = exState (semEscrow (motion7 (voteA7 1 ballotAdopt (voteA7 2 ballotAdopt (voteA7 3 ballotAdopt (voteA7 4 ballotAdopt (fmNil (Op natCMon))))))) s1)
+
+-- Independent pairs (Table 3.1): the two orders give the same view, and
+-- the result is some.
+p33VoteVote : Eq TView (p33Ab (p33Vote 1 2 decRelease) (p33Vote 2 2 decRefund) p33S) (p33Ab (p33Vote 2 2 decRefund) (p33Vote 1 2 decRelease) p33S)
+p33VoteVote = refl
+
+p33VoteVoteOn : Eq Bool (p33On (p33Vote 1 2 decRelease) (p33Vote 2 2 decRefund) p33S) true
+p33VoteVoteOn = refl
+
+p33VoteEA : Eq TView (p33Ab (p33Vote 3 0 decRefund) (opVote natCMon (address 1) 0 (voteA ballotAdopt)) s1) (p33Ab (opVote natCMon (address 1) 0 (voteA ballotAdopt)) (p33Vote 3 0 decRefund) s1)
+p33VoteEA = refl
+
+p33VoteEAOn : Eq Bool (p33On (p33Vote 3 0 decRefund) (opVote natCMon (address 1) 0 (voteA ballotAdopt)) s1) true
+p33VoteEAOn = refl
+
+p33DepVote : Eq TView (p33Ab (p33Dep 1 2 receiptB) (p33Vote 3 0 decRefund) s1) (p33Ab (p33Vote 3 0 decRefund) (p33Dep 1 2 receiptB) s1)
+p33DepVote = refl
+
+p33DepVoteOn : Eq Bool (p33On (p33Dep 1 2 receiptB) (p33Vote 3 0 decRefund) s1) true
+p33DepVoteOn = refl
+
+p33DepWd : Eq TView (p33Ab (p33Dep 1 2 receiptD) (p33Wd 2 20) p33S) (p33Ab (p33Wd 2 20) (p33Dep 1 2 receiptD) p33S)
+p33DepWd = refl
+
+p33DepWdOn : Eq Bool (p33On (p33Dep 1 2 receiptD) (p33Wd 2 20) p33S) true
+p33DepWdOn = refl
+
+p33WdWd : Eq TView (p33Ab (p33Wd 2 20) (p33Wd 1 5) p33S) (p33Ab (p33Wd 1 5) (p33Wd 2 20) p33S)
+p33WdWd = refl
+
+p33WdWdOn : Eq Bool (p33On (p33Wd 2 20) (p33Wd 1 5) p33S) true
+p33WdWdOn = refl
+
+p33VoteWd : Eq TView (p33Ab (p33Vote 1 2 decRelease) (p33Wd 2 20) p33S) (p33Ab (p33Wd 2 20) (p33Vote 1 2 decRelease) p33S)
+p33VoteWd = refl
+
+p33VoteWdOn : Eq Bool (p33On (p33Vote 1 2 decRelease) (p33Wd 2 20) p33S) true
+p33VoteWdOn = refl
+
+p33MotVote : Eq TView (p33Ab (opMotion natCMon (address 1) kappaEx7) (p33Vote 3 0 decRefund) s1) (p33Ab (p33Vote 3 0 decRefund) (opMotion natCMon (address 1) kappaEx7) s1)
+p33MotVote = refl
+
+p33MotVoteOn : Eq Bool (p33On (opMotion natCMon (address 1) kappaEx7) (p33Vote 3 0 decRefund) s1) true
+p33MotVoteOn = refl
+
+p33SetVote : Eq TView (p33Ab (opSettle natCMon 0) (p33Vote 1 1 decRefund) p33R) (p33Ab (p33Vote 1 1 decRefund) (opSettle natCMon 0) p33R)
+p33SetVote = refl
+
+p33SetVoteOn : Eq Bool (p33On (opSettle natCMon 0) (p33Vote 1 1 decRefund) p33R) true
+p33SetVoteOn = refl
+
+p33CastDep : Eq TView (p33Ab (opCast natCMon (botE kappaEx4)) (p33Dep 1 2 receiptB) s1) (p33Ab (p33Dep 1 2 receiptB) (opCast natCMon (botE kappaEx4)) s1)
+p33CastDep = refl
+
+p33CastDepOn : Eq Bool (p33On (opCast natCMon (botE kappaEx4)) (p33Dep 1 2 receiptB) s1) true
+p33CastDepOn = refl
+
+-- Dependent pairs: the two orders give different values. Two deposits put
+-- their claims in the order of the deposits.
+p33DepDep12 : Eq (Option (FreeMon (Claim natCMon))) (tClaims (semEscrow (p33Seq (p33Dep 1 2 receiptEx) (p33Dep 3 4 receiptC)) s0)) (some (fmCons (Claim natCMon) (pack (address 1) (pack (address 2) 40)) (fmCons (Claim natCMon) (pack (address 3) (pack (address 4) 10)) (fmNil (Claim natCMon)))))
+p33DepDep12 = refl
+
+p33DepDep34 : Eq (Option (FreeMon (Claim natCMon))) (tClaims (semEscrow (p33Seq (p33Dep 3 4 receiptC) (p33Dep 1 2 receiptEx)) s0)) (some (fmCons (Claim natCMon) (pack (address 3) (pack (address 4) 10)) (fmCons (Claim natCMon) (pack (address 1) (pack (address 2) 40)) (fmNil (Claim natCMon)))))
+p33DepDep34 = refl
+
+-- A settle before the quorum vote stops; after it, the result is some.
+p33SetFirst : Eq TView (p33Ab (opSettle natCMon 0) (p33Vote 3 0 decRelease) p33V) none
+p33SetFirst = refl
+
+p33VoteFirst : Eq Bool (p33On (p33Vote 3 0 decRelease) (opSettle natCMon 0) p33V) true
+p33VoteFirst = refl
+
+-- An enact clears the ballots: a vote before it is lost, a vote after it
+-- stays.
+p33VoteEnact : Eq (Option (FreeMon (FreeMon (Option DecE)))) (tGammaE (semEscrow (p33Seq (p33Vote 3 0 decRefund) (opEnact natCMon 7)) p33E)) (some (fmCons (FreeMon (Option DecE)) (botE kappaEx7) (fmNil (FreeMon (Option DecE)))))
+p33VoteEnact = refl
+
+p33EnactVote : Eq (Option (FreeMon (FreeMon (Option DecE)))) (tGammaE (semEscrow (p33Seq (opEnact natCMon 7) (p33Vote 3 0 decRefund)) p33E)) (some (fmCons (FreeMon (Option DecE)) (fmSetAt (Option DecE) (botE kappaEx7) (some decRefund) 2) (fmNil (FreeMon (Option DecE)))))
+p33EnactVote = refl
+
 -- Prop 3.4 (W1): any two quorums (coalitions of at least t members) share
 -- more than f(n) members, for n = 4 (t = 3) and n = 7 (t = 5). At t = 2 on
 -- n = 4, W1 fails and two quorums can share no member (D70). subsets gives

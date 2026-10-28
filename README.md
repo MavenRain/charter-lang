@@ -7,9 +7,9 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S2c)
+## Status (S2d)
 
-S1, S2a, S2b and S2c are built. The front end has the leaf-lang surface. `langc fmt`
+S1, S2a, S2b, S2c and S2d are built. The front end has the leaf-lang surface. `langc fmt`
 prints the one canonical form, and `langc check --json` gives a JSON
 diagnostic with a fix hint and the counts parsed, typed and laws (the law
 definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
@@ -40,10 +40,16 @@ ledger, credit, the open claims, the spent receipt keys, `Gamma_E` and
 `examples/escrow.lang` discharges the S2c law rows of `docs/PLAN.md`
 section 6 (152 of 152 laws). Thm 4.3 has a general proof (`enactEscrow`).
 Invariant I, Cor 4.2, Conservation and Thm 4.5 have law points on one
-valid transcript from `S_0`. Their general proofs are open. Prop 3.3 and
-3.4 have law points in S2c, and their tests are in S2d. The crypto parts
-are not built. `make check` passes. `docs/PLAN.md` section 9 gives the
-slices.
+valid transcript from `S_0`. Their general proofs are open.
+
+S2d adds the tests of Prop 3.3 and 3.4 in `examples/escrow.lang` (178 of
+178 laws). The Prop 3.3 tests compare a view of the state, with the
+position `pos` erased (D73): two independent operations commute on the
+view. Prop 3.4 has quorum law points, and its honest-signer part is a test
+of S8. The open items O-off-1 to O-off-8 are ruled (`docs/PLAN.md` section
+10, Q10 (a)). `SPEC.md` sections 1, 3, 4, 7 and 8 are filled. The crypto
+parts are not built. `make check` passes. `docs/PLAN.md` section 9 gives
+the slices.
 
 ## When to reach for charter-lang
 
