@@ -1,0 +1,241 @@
+-- The constitution kappa (Def 2.1) on two examples: n = 4 with t = 3 and
+-- tA = 4, and n = 7 with t = 5 and tA = 5. The law defs check f(n), the key
+-- order, W1 and W2 (Def 2.4) at true and false points, the threshold rule
+-- theta_t (Ex 2.5) and Ready_t (Def 2.3).
+members4 : FreeMon Address
+members4 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmNil Address))))
+
+members7 : FreeMon Address
+members7 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmCons Address (address 5) (fmCons Address (address 6) (fmCons Address (address 7) (fmNil Address)))))))
+
+kappaEx4 : Kappa
+kappaEx4 = pack members4 (pack 3 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 3 c)))
+
+kappaEx7 : Kappa
+kappaEx7 = pack members7 (pack 5 (pack 5 (λ (c : Tally 7) → thetaThreshold 7 5 c)))
+
+-- A kappa with t = 2 on n = 4: W1 fails.
+kappaBad : Kappa
+kappaBad = pack members4 (pack 2 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 2 c)))
+
+-- Elements of K_wf: the check reduces to true, so refl is the proof.
+kappaWfEx4 : KappaWf
+kappaWfEx4 = pack kappaEx4 refl
+
+kappaWfEx7 : KappaWf
+kappaWfEx7 = pack kappaEx7 refl
+
+-- f(n) = (n - 1) / 3 rounded down.
+fault0 : Eq ℕ (faultBound 0) 0
+fault0 = refl
+
+fault4 : Eq ℕ (faultBound 4) 1
+fault4 = refl
+
+fault7 : Eq ℕ (faultBound 7) 2
+fault7 = refl
+
+fault10 : Eq ℕ (faultBound 10) 3
+fault10 = refl
+
+-- The keys ascend strictly: a repeated key or a lower key gives false.
+ascending4 : Eq Bool (kappaAscending members4) true
+ascending4 = refl
+
+ascendingRepeat : Eq Bool (kappaAscending (fmCons Address (address 2) (fmCons Address (address 2) (fmNil Address)))) false
+ascendingRepeat = refl
+
+ascendingDown : Eq Bool (kappaAscending (fmCons Address (address 3) (fmCons Address (address 1) (fmNil Address)))) false
+ascendingDown = refl
+
+-- Strict comparison and key ordering cover the full Nat range.
+ltMaxZero : Eq Bool (natLt 18446744073709551615 0) false
+ltMaxZero = refl
+
+ltMaxSelf : Eq Bool (natLt 18446744073709551615 18446744073709551615) false
+ltMaxSelf = refl
+
+ltBeforeMax : Eq Bool (natLt 18446744073709551614 18446744073709551615) true
+ltBeforeMax = refl
+
+ascendingZero : Eq Bool (kappaAscending (fmCons Address (address 0) (fmNil Address))) true
+ascendingZero = refl
+
+ascendingLast : Eq Bool (kappaAscending (fmCons Address (address 18446744073709551614) (fmCons Address (address 18446744073709551615) (fmNil Address)))) true
+ascendingLast = refl
+
+ascendingMaxRepeat : Eq Bool (kappaAscending (fmCons Address (address 18446744073709551615) (fmCons Address (address 18446744073709551615) (fmNil Address)))) false
+ascendingMaxRepeat = refl
+
+ascendingMaxDown : Eq Bool (kappaAscending (fmCons Address (address 18446744073709551615) (fmCons Address (address 0) (fmNil Address)))) false
+ascendingMaxDown = refl
+
+length4 : Eq ℕ (kappaN kappaEx4) 4
+length4 = refl
+
+length7 : Eq ℕ (kappaN kappaEx7) 7
+length7 = refl
+
+-- W1 and W2 hold on the two examples.
+w1Ex4 : Eq Bool (kappaW1 kappaEx4) true
+w1Ex4 = refl
+
+w2Ex4 : Eq Bool (kappaW2 kappaEx4) true
+w2Ex4 = refl
+
+w1Ex7 : Eq Bool (kappaW1 kappaEx7) true
+w1Ex7 = refl
+
+w2Ex7 : Eq Bool (kappaW2 kappaEx7) true
+w2Ex7 = refl
+
+wellFormed4 : Eq Bool (kappaWellFormed kappaEx4) true
+wellFormed4 = refl
+
+wellFormed7 : Eq Bool (kappaWellFormed kappaEx7) true
+wellFormed7 = refl
+
+wellFormedBad : Eq Bool (kappaWellFormed kappaBad) false
+wellFormedBad = refl
+
+-- W1 fails at (n, t) = (4, 2), (4, 4) and (5, 3). At (5, 3), n + f(n) = 2t,
+-- so a mutant of < to <= gives true.
+w1False42 : Eq Bool (kappaW1Of 4 2) false
+w1False42 = refl
+
+w1False44 : Eq Bool (kappaW1Of 4 4) false
+w1False44 = refl
+
+w1False53 : Eq Bool (kappaW1Of 5 3) false
+w1False53 = refl
+
+-- W2 fails at (n, t, tA) = (4, 3, 5) and (4, 3, 2).
+w2False435 : Eq Bool (kappaW2Of 4 3 5) false
+w2False435 = refl
+
+w2False432 : Eq Bool (kappaW2Of 4 3 2) false
+w2False432 = refl
+
+-- Tallies on n = 4: (Release, Refund, Hold, bot) = (3, 1, 0, 0),
+-- (0, 3, 0, 1) and (1, 1, 0, 2).
+tallyRel4 : Tally 4
+tallyRel4 = pack 3 (pack 1 (pack 0 (pack 0 refl)))
+
+tallyRef4 : Tally 4
+tallyRef4 = pack 0 (pack 3 (pack 0 (pack 1 refl)))
+
+tallySplit4 : Tally 4
+tallySplit4 = pack 1 (pack 1 (pack 0 (pack 2 refl)))
+
+-- theta_t at t = 3: a count equal to t is enough.
+theta4Release : Eq DecE (kappaTheta kappaEx4 tallyRel4) decRelease
+theta4Release = refl
+
+theta4Refund : Eq DecE (kappaTheta kappaEx4 tallyRef4) decRefund
+theta4Refund = refl
+
+theta4Hold : Eq DecE (kappaTheta kappaEx4 tallySplit4) decHold
+theta4Hold = refl
+
+-- Ready_t at t = 3: n - c(bot) >= t.
+ready4Release : Eq Bool (tallyReady 4 3 tallyRel4) true
+ready4Release = refl
+
+ready4Refund : Eq Bool (tallyReady 4 3 tallyRef4) true
+ready4Refund = refl
+
+ready4Split : Eq Bool (tallyReady 4 3 tallySplit4) false
+ready4Split = refl
+
+-- Ballot vectors in key order, none is bot. x4Perm is x4 with the keys 2
+-- and 4 swapped, y4Perm is y4 with the keys 1 and 2 swapped, and y7Perm is
+-- y7 in a different order. W3 and orbit constancy: F, Ready_t and Amd_tA
+-- give the same value on a vector and on its permutation.
+x4 : FreeMon (Option DecE)
+x4 = fmCons (Option DecE) (some decRelease) (fmCons (Option DecE) none (fmCons (Option DecE) (some decRelease) (fmCons (Option DecE) (some decRelease) (fmNil (Option DecE)))))
+
+x4Perm : FreeMon (Option DecE)
+x4Perm = fmCons (Option DecE) (some decRelease) (fmCons (Option DecE) (some decRelease) (fmCons (Option DecE) (some decRelease) (fmCons (Option DecE) none (fmNil (Option DecE)))))
+
+y4 : FreeMon (Option BallotA)
+y4 = fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotReject) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmNil (Option BallotA)))))
+
+y4Perm : FreeMon (Option BallotA)
+y4Perm = fmCons (Option BallotA) (some ballotReject) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmNil (Option BallotA)))))
+
+y4All : FreeMon (Option BallotA)
+y4All = fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmNil (Option BallotA)))))
+
+y7 : FreeMon (Option BallotA)
+y7 = fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotReject) (fmCons (Option BallotA) (some ballotReject) (fmCons (Option BallotA) none (fmCons (Option BallotA) none (fmNil (Option BallotA))))))))
+
+y7Perm : FreeMon (Option BallotA)
+y7Perm = fmCons (Option BallotA) none (fmCons (Option BallotA) (some ballotReject) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) none (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotReject) (fmCons (Option BallotA) (some ballotAdopt) (fmNil (Option BallotA))))))))
+
+-- tau(x4) = (3, 0, 0, 1), so F = theta_3 o tau gives Release.
+tau4Release : Eq ℕ (tallyRelease 4 (tauE x4)) 3
+tau4Release = refl
+
+tau4Bot : Eq ℕ (tallyBot 4 (tauE x4)) 1
+tau4Bot = refl
+
+f4 : Eq DecE (kappaTheta kappaEx4 (tauE x4)) decRelease
+f4 = refl
+
+fViaF4 : Eq DecE (kappaF kappaEx4 x4 refl) decRelease
+fViaF4 = refl
+
+w3Ex4 : Eq DecE (kappaF kappaEx4 x4 refl) (kappaF kappaEx4 x4Perm refl)
+w3Ex4 = refl
+
+orbitReady4 : Eq Bool (tallyReady 4 3 (tauE x4)) (tallyReady 4 3 (tauE x4Perm))
+orbitReady4 = refl
+
+-- Amd_tA at tA = 4 on n = 4 and at tA = 5 on n = 7.
+amd4Reject : Eq DecA (kappaAmd kappaEx4 (tauA y4)) amendReject
+amd4Reject = refl
+
+orbitAmd4 : Eq DecA (kappaAmd kappaEx4 (tauA y4)) (kappaAmd kappaEx4 (tauA y4Perm))
+orbitAmd4 = refl
+
+amd4Adopt : Eq DecA (kappaAmd kappaEx4 (tauA y4All)) amendAdopt
+amd4Adopt = refl
+
+amd7Hold : Eq DecA (kappaAmd kappaEx7 (tauA y7)) amendHold
+amd7Hold = refl
+
+orbitAmd7 : Eq DecA (kappaAmd kappaEx7 (tauA y7)) (kappaAmd kappaEx7 (tauA y7Perm))
+orbitAmd7 = refl
+
+-- The Kleisli laws of T (Q-S2b-2), and two points that compute.
+kleisliUnitL : (M : CMon) → (a : (n : ℕ) → T M ℕ) → (n : ℕ) → Eq (T M ℕ) (tKleisli M ℕ ℕ ℕ (tRet M ℕ) a n) (a n)
+kleisliUnitL M a n = tKUnitL M ℕ ℕ a n
+
+kleisliUnitR : (M : CMon) → (a : (n : ℕ) → T M ℕ) → (n : ℕ) → Eq (T M ℕ) (tKleisli M ℕ ℕ ℕ a (tRet M ℕ) n) (a n)
+kleisliUnitR M a n = tKUnitR M ℕ ℕ a n
+
+kleisliAssoc : (M : CMon) → (a : (n : ℕ) → T M ℕ) → (b : (n : ℕ) → T M Bool) → (c : (x : Bool) → T M ℕ) → (n : ℕ) → Eq (T M ℕ) (tKleisli M ℕ Bool ℕ (tKleisli M ℕ ℕ Bool a b) c n) (tKleisli M ℕ ℕ ℕ a (tKleisli M ℕ Bool ℕ b c) n)
+kleisliAssoc M a b c n = tKAssoc M ℕ ℕ Bool ℕ a b c n
+
+emitNone : (M : CMon) → (v : Voucher M) → Eq (T M ℕ) (tEmit M ℕ v (tNone M ℕ)) (tNone M ℕ)
+emitNone M v = refl
+
+bindPoint : (M : CMon) → Eq (T M ℕ) (tBind M ℕ ℕ (tRet M ℕ 2) (λ (n : ℕ) → tRet M ℕ (natAdd n 1))) (tRet M ℕ 3)
+bindPoint M = refl
+
+-- Thm 3.1 (L287 to L289) on an op that adds x to the state and emits
+-- nothing, and on an op that stops.
+semOp : (M : CMon) → (x : ℕ) → (s : ℕ) → T M ℕ
+semOp M x s = tRet M ℕ (natAdd s x)
+
+semNil : (M : CMon) → Eq ((s : ℕ) → T M ℕ) (tSem M ℕ ℕ (semOp M) (fmNil ℕ)) (tRet M ℕ)
+semNil M = tSemNil M ℕ ℕ (semOp M)
+
+semAppend : (M : CMon) → (w : FreeMon ℕ) → (w2 : FreeMon ℕ) → (s : ℕ) → Eq (T M ℕ) (tSem M ℕ ℕ (semOp M) (fmAppend ℕ w w2) s) (tKleisli M ℕ ℕ ℕ (tSem M ℕ ℕ (semOp M) w) (tSem M ℕ ℕ (semOp M) w2) s)
+semAppend M w w2 s = tSemAppend M ℕ ℕ (semOp M) w w2 s
+
+semPoint : (M : CMon) → Eq (T M ℕ) (tSem M ℕ ℕ (semOp M) (fmCons ℕ 2 (fmCons ℕ 3 (fmNil ℕ))) 1) (tRet M ℕ 6)
+semPoint M = refl
+
+semStop : (M : CMon) → Eq (T M ℕ) (tSem M ℕ ℕ (λ (x : ℕ) (s : ℕ) → tNone M ℕ) (fmCons ℕ 2 (fmNil ℕ)) 1) (tNone M ℕ)
+semStop M = refl

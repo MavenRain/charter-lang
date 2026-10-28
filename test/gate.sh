@@ -158,6 +158,20 @@ case "$status:$first" in
   "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
   *) echo "FAIL ind.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
 esac
+status=0
+build/langc check test/ir/optind.lang > /dev/null || status=$?
+[ "$status" -eq 0 ] || { echo "FAIL optind.lang: check exit $status"; fail=$((fail + 1)); }
+for want in "someGet 4:5" "noneGet 3:3" "pickGet 1:2" "pickGet 5:0"; do
+  call=${want%%:*}
+  got=$(build/langc eval test/ir/optind.lang ${call% *} ${call#* } 2>&1) || true
+  [ "$got" = "${want#*:}" ] || { echo "FAIL optind.lang $call: want ${want#*:}, got $got"; fail=$((fail + 1)); }
+done
+status=0
+first=$(build/langc ir test/ir/optind.lang 2>&1 > /dev/null) || status=$?
+case "$status:$first" in
+  "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
+  *) echo "FAIL optind.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
+esac
 
 # The Wasm target: each module builds and is valid. Then the differential: on
 # the grid of test/grid.awk, node and `langc eval` give the same result for
@@ -272,13 +286,16 @@ for want in 'progress-part:{"parsed":"3 of 3","typed":"2 of 3","laws":"0 of 0"}'
   got=$(build/langc check --json "test/json/${want%%:*}.lang" 2>/dev/null | tail -n 1) || true
   [ "$got" = "${want#*:}" ] || { echo "FAIL progress ${want%%:*}: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done
-# The laws count on examples/assets.lang: not zero (the natCMon laws), and
-# all of the laws type-check.
-laws=$(build/langc check --json examples/assets.lang 2>/dev/null | tail -n 1 | rg -o -r '$1' '"laws":"([0-9]+ of [0-9]+)"') || true
-if [ -z "$laws" ] || [ "${laws% of *}" != "${laws#* of }" ] || [ "${laws% of *}" = 0 ]; then
-  echo "FAIL progress assets: want laws \"m of m\" with m > 0, got $laws"
-  fail=$((fail + 1))
-fi
+# The laws count on examples/assets.lang (the natCMon laws) and on
+# examples/kappa.lang (the kappa laws): not zero, and all of the laws
+# type-check.
+for f in assets kappa; do
+  laws=$(build/langc check --json "examples/$f.lang" 2>/dev/null | tail -n 1 | rg -o -r '$1' '"laws":"([0-9]+ of [0-9]+)"') || true
+  if [ -z "$laws" ] || [ "${laws% of *}" != "${laws#* of }" ] || [ "${laws% of *}" = 0 ]; then
+    echo "FAIL progress $f: want laws \"m of m\" with m > 0, got $laws"
+    fail=$((fail + 1))
+  fi
+done
 
 # docs/DIAGNOSTICS.md has one row for each code in src/. Each code has
 # test/json/CODE.lang (its first JSON line has that code), or its row gives

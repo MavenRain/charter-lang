@@ -879,12 +879,41 @@ static const Core *ind_nat(Call *k) {
   return core_op(c, OP_IND_NAT, 0, 0, cores, 4u);
 }
 
+/* (x : A) -> P (some x), with PV the value of the motive P. */
+static const Value *ind_some(Checker *c, const Value *a, const Value *pv) {
+  const Core *some = op3(c, OP_SOME, 0, 1, core_index(c, CORE_VAR, 0u), NULL, NULL);
+  const Core *body = some == NULL ? NULL : core_app(c, core_index(c, CORE_VAR, 1u), some);
+  const Env *env = body == NULL ? NULL : env_push(c->m, NULL, pv);
+  return env == NULL ? NULL : val_closure(c->m, VAL_PI, "x", a, env, body);
+}
+
+/* ind P n s o on the host Option (Q-S2b-2), with P : Option A -> Type l,
+   n : P none and s : (x : A) -> P (some x). The type is P o. rule_ind
+   selects it for an Option fourth argument when no family scrutinee fits. */
+static const Core *ind_option(Call *k, const Core *o, const Value *ot) {
+  Checker *c = k->c;
+  Machine *m = c->m;
+  const Core *p = ind_motive(c, k->args[0], ot, "Option A");
+  const Value *pv = p == NULL ? NULL : here(c, p);
+  const Value *none = pv == NULL ? NULL : here(c, op3(c, OP_NONE, 0, 0, NULL, NULL, NULL));
+  const Core *z = none == NULL ? NULL : check(c, k->args[1], apply_value(m, pv, none));
+  const Core *s = z == NULL ? NULL : check(c, k->args[2], ind_some(c, ot->args[0], pv));
+  const Core *cores[4] = {p, z, s, o};
+  if (s == NULL)
+    return NULL;
+  k->used = 4u;
+  k->type = apply_value(m, pv, here(c, o));
+  return core_op(c, OP_IND_OPTION, 0, 0, cores, 4u);
+}
+
 /* The family scrutinee sets the arity. Any arguments after it apply to
    the result of ind, just as they do for the Nat form. */
 static const Core *rule_ind(Call *k) {
   Checker *c = k->c;
   const Value *st = NULL;
   const Value *pt = NULL;
+  const Value *ot = NULL;
+  const Core *o = NULL;
   const Core *p = try_infer(c, k->args[0], &pt);
   uint32_t i;
   for (i = 1u; i < k->argc; i++) {
@@ -892,7 +921,22 @@ static const Core *rule_ind(Call *k) {
     if (s != NULL && val_is(st, OP_FAMILY) && c->m->families[st->inst].ctor_count + 2u == i + 1u &&
         (p == NULL || pt == NULL || pt->kind != VAL_PI || conv_values(c->m, c->level, pt->dom, st)))
       return ind_family(k, s, st);
+    if (s != NULL && i == 3u && val_is(st, OP_OPTION)) {
+      const Core *result;
+      Diag saved = *c->m->diag;
+      o = s;
+      ot = st;
+      /* Check the cases before a trailing family argument can claim ind.
+         An Option-valued family case can also occur here, so recover
+         from a failed Option candidate and keep looking. */
+      result = ind_option(k, o, ot);
+      if (result != NULL)
+        return result;
+      *c->m->diag = saved;
+    }
   }
+  if (o != NULL)
+    return ind_option(k, o, ot);
   if (k->argc < 4u)
     return nul(FAIL(c, "TYPE_ARITY", "ind needs a motive, one case for each constructor and a last argument of type Nat or a domain data type; found %u arguments", k->argc));
   return ind_nat(k);

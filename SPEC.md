@@ -176,6 +176,7 @@ stays on a run-time value (`REFUSE_RUNTIME_TREE`).
 |---|---|
 | `ind` on `ℕ` | `ind P z s n` with `P : ℕ → Type l`, `z : P 0` and `s : (k : ℕ) → P k → P (natAdd k 1)` has the type `P n`. It computes on a literal and on `natAdd k j` for a literal `j`. A bad motive gives `TYPE_MISMATCH`. |
 | `ind` on a domain family | `ind P c1 .. cn x` with `x : F p1 .. pm` and `P : F p1 .. pm → Type l` has the type `P x`. There is one case for each constructor, in order: a Pi over each field, with `ih : P f` after each recursive field `f`, to `P (ctor p1 .. pm fields)`. It computes on a constructor value. |
+| `ind` on `Option` | `ind P cn cs m` with `m : Option X`, `P : Option X → Type l`, `cn : P none` and `cs : (x : X) → P (some x)` has the type `P m` (Q-S2b-2). It computes on `none` and on `some x`. On another term it stays neutral. A bad motive gives `TYPE_MISMATCH`. `langc ir` refuses it on a run-time value (`test/ir/optind.lang`). |
 | uniform recursion | A recursive field of `F` has the type `F p1 .. pm`, and each argument is the parameter of `F` at the same position. Another argument gives `DOMAIN_FAMILY`. `fold` and `ind` take the parameter instance, for example `FreeMon ℕ`. |
 | `natAdd` | `natAdd x 0 = x`; `natAdd x (natAdd y j) = natAdd (natAdd x y) j` for a literal `j`. |
 | `natLe` | `natLe 0 y = true`; `natLe (natAdd x 1) 0 = false`; `natLe (natAdd x 1) (natAdd y 1) = natLe x y`. |
@@ -227,7 +228,11 @@ the host form of each former.
 
 | Type | Meaning (design section) | Definition |
 |---|---|---|
-| | | |
+| `Tally n` | a tally `c : D_E + {bot} → ℕ` with `sum c = n` (Def 2.2, L236). It represents the orbit `X // Sym(M)` (Q7). | an iterated Sigma: the counts of Release, Refund, Hold and bot, and an `Eq ℕ` of their sum to `n` |
+| `TallyA n` | an amendment tally `c : B_A + {bot} → ℕ` with `sum c = n` (L226) | an iterated Sigma: the counts of Adopt, Reject and bot, and an `Eq ℕ` of their sum to `n` |
+| `Kappa` | the constitution `kappa = (M, t, tA, theta)` (Def 2.1, L234) | `(members : FreeMon Address) × (thr : ℕ) × (thrA : ℕ) × ((c : Tally (fmLength Address members)) → DecE)`. `n` is the length of `members`. The decidable check of `K_wf` is `kappaWellFormed` (Q1). |
+| `KappaWf` | `K_wf`, the well-formed constitutions (L240 to L243; Q1 (a)) | `(k : Kappa) × Eq Bool (kappaWellFormed k) true`. `kappaWellFormed k` holds if the keys of `members` ascend and W1 and W2 hold. W3 holds by the type of `theta`. |
+| `T M Z` | the partial writer `T Z = 1 + Z x List Voucher` (L285, L286; Q5) | `Option (Z × FreeMon (Voucher M))`. `none` is a stop. `some (z, o)` is a result `z` with the output `o`. Probe-forced: conv has no `Option` eta, thus the one CM form of Q5 has no proof of the right unit (Q-S2b-2). |
 
 ## 6. Core operations
 
@@ -236,7 +241,17 @@ the host form of each former.
 
 | Operation | Type | Meaning (design section) |
 |---|---|---|
-| | | |
+| `faultBound` | `ℕ → ℕ` | `f(n)`, the quotient of `n - 1` by 3, by a fold over `ℕ` (W1, L240) |
+| `kappaW1Of`, `kappaW2Of` | `ℕ → ℕ → Bool`, `ℕ → ℕ → ℕ → Bool` | the decidable checks W1 (`n + f(n) < 2t` and `t <= n - f(n)`) and W2 (`t <= tA <= n`) (L240, L241) |
+| `kappaWellFormed` | `Kappa → Bool` | the decidable check of `K_wf` (Q1) |
+| `thetaThreshold` | `(n : ℕ) → ℕ → Tally n → DecE` | the threshold rule `theta_t` (Ex 2.5): Release if `c(Release) >= t`, Refund if `c(Refund) >= t`, else Hold |
+| `tallyReady` | `(n : ℕ) → ℕ → Tally n → Bool` | `Ready_t(X)`: `n - c(bot) >= t` (Def 2.3) |
+| `tauE`, `tauA` | `(xs : FreeMon (Option DecE)) → Tally (fmLength (Option DecE) xs)`, and the same form for `BallotA` and `TallyA` | `tau`, with `tau(X)(d)` the count of `d` in the vote vector `X` (Def 2.2, L236) |
+| `kappaF` | `(k : Kappa) → (xs : FreeMon (Option DecE)) → Eq ℕ (fmLength (Option DecE) xs) (kappaN k) → DecE` | `F = theta o tau` (Def 2.4). It reads `xs` only through `tau`, thus W3 holds by construction (L243; Q7). |
+| `amdThreshold`, `kappaAmd` | `(n : ℕ) → ℕ → TallyA n → DecA`, `(k : Kappa) → TallyA (kappaN k) → DecA` | the amendment rule `Amd_tA` (L395): Adopt if `c(Adopt) >= tA`, Reject if `c(Reject) > n - tA`, else Hold |
+| `tRet`, `tNone`, `tEmit` | `Z → T M Z`, `T M Z`, `Voucher M → T M Z → T M Z`, each after `(M : CMon)` and `(Z : Type 0)` | `eta`, the stop, and `emit` with `emit v none = none` (L285, L286) |
+| `tBind`, `tKleisli` | `T M Y → (Y → T M Z) → T M Z`, `(X → T M Y) → (Y → T M Z) → X → T M Z`, each after `(M : CMon)` and the type arguments | bind and the Kleisli composition `>=>` of `T` (L286 to L289) |
+| `tSem` | `(M : CMon) → (X : Type 0) → (S : Type 0) → (X → S → T M S) → FreeMon X → S → T M S` | the transcript fold `sem` (L287): `sem eps = eta` and `sem (x :: w) = op x >=> sem w`. `tSemNil` and `tSemAppend` state Thm 3.1. |
 
 ## 7. Target and instance encoding
 

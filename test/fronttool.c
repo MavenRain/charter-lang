@@ -195,6 +195,19 @@ int main(int argc, char **argv) {
                "emSum : (e : Emit ℕ) → ℕ\n"
                "emSum e = ind (λ (x : Emit ℕ) → ℕ) (λ (z : ℕ) → z) 0 (λ (v : ℕ) (t : Emit ℕ) (ih : ℕ) → natAdd v ih) e\n\n"
                "emLaw : (v : ℕ) → (t : Emit ℕ) → Eq ℕ (emSum (emStep ℕ v t)) (natAdd v (emSum t))\nemLaw v t = refl", NULL);
+  /* ind on the host Option (Q-S2b-2): a dependent motive, and a motive on ℕ. */
+  ok &= domain("optGet : (o : Option ℕ) → ℕ\noptGet o = ind (λ (x : Option ℕ) → ℕ) 0 (λ (n : ℕ) → n) o\n\n"
+               "optEta : (o : Option ℕ) → Eq (Option ℕ) (option none (λ (n : ℕ) → some n) o) o\n"
+               "optEta o = ind (λ (x : Option ℕ) → Eq (Option ℕ) (option none (λ (n : ℕ) → some n) x) x) refl (λ (n : ℕ) → refl) o", NULL);
+  ok &= domain("bad : (o : Option ℕ) → ℕ\nbad o = ind (λ (n : ℕ) → ℕ) 0 (λ (n : ℕ) → n) o", "TYPE_MISMATCH");
+  /* A trailing family argument must not hide the Option scrutinee. */
+  ok &= domain("data Choice : Type where\n  choiceA : Choice\n  choiceB : Choice\n  choiceC : Choice\n\n"
+               "optApply : (o : Option ℕ) → (d : Choice) → ℕ\n"
+               "optApply o d = ind (λ x → (e : Choice) → ℕ) (λ (e : Choice) → 0) (λ (n : ℕ) (e : Choice) → n) o d\n\n"
+               "someApply : Eq ℕ (optApply (some 7) choiceA) 7\nsomeApply = refl\n\n"
+               "noneApply : Eq ℕ (optApply none choiceC) 0\nnoneApply = refl\n\n"
+               "choose : (d : Choice) → Option ℕ\nchoose d = ind (λ x → Option ℕ) (some 1) (some 2) (some 3) d\n\n"
+               "choiceApply : Eq (Option ℕ) (choose choiceC) (some 3)\nchoiceApply = refl", NULL);
   /* R1 second class (Q-S2a-2): a free monoid, and the cons forms it refuses. */
   ok &= domain("data FreeM (A : Type 0) : Type where\n  frNil : FreeM A\n  frCons : (frHead : A) → (frTail : FreeM A) → FreeM A", NULL);
   ok &= domain("data TwoA (A : Type 0) : Type where\n  twNil : TwoA A\n  twCons : (twHead : A) → (twNext : A) → TwoA A", "REFUSE_CELL");

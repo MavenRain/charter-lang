@@ -666,6 +666,7 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_FOLD_NAT:
   case OP_IND_NAT:
   case OP_IND_FAMILY:
+  case OP_IND_OPTION:
   case OP_FOLD_LIST:
   case OP_FOLD_FAMILY:
   case OP_UNFOLD:
@@ -1219,7 +1220,8 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
     return fold_nat(l, b, v, out);
   case OP_IND_NAT:
   case OP_IND_FAMILY:
-    return diag_fail(l->m->diag, "REFUSE_RUNTIME_TREE", l->m->def, "an ind over a run-time Nat or domain value is not in the Wasm host (HOST-LIMIT): ind is for proofs");
+  case OP_IND_OPTION:
+    return diag_fail(l->m->diag, "REFUSE_RUNTIME_TREE", l->m->def, "an ind over a run-time Nat, Option or domain value is not in the Wasm host (HOST-LIMIT): ind is for proofs");
   case OP_FOLD_LIST:
     return fold_list(l, b, v, out);
   case OP_UNFOLD:

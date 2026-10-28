@@ -20,6 +20,10 @@ fmUnitR A xs = ind (λ (x : FreeMon A) → Eq (FreeMon A) (fmAppend A x (fmNil A
 fmAssoc : (A : Type 0) → (xs : FreeMon A) → (ys : FreeMon A) → (zs : FreeMon A) → Eq (FreeMon A) (fmAppend A (fmAppend A xs ys) zs) (fmAppend A xs (fmAppend A ys zs))
 fmAssoc A xs ys zs = ind (λ (x : FreeMon A) → Eq (FreeMon A) (fmAppend A (fmAppend A x ys) zs) (fmAppend A x (fmAppend A ys zs))) refl (λ (h : A) (t : FreeMon A) (ih : Eq (FreeMon A) (fmAppend A (fmAppend A t ys) zs) (fmAppend A t (fmAppend A ys zs))) → cong (λ (y : FreeMon A) → fmCons A h y) ih) xs
 
+-- The length of a list.
+fmLength : (A : Type 0) → (xs : FreeMon A) → ℕ
+fmLength A xs = fold 0 (λ (h : A) (acc : ℕ) → natAdd acc 1) xs
+
 -- Kit regression subject, not charter data: a fold over a Tree that exists
 -- at run time is a HOST-LIMIT (test/ir/tree.lang; Q-S2a-1 (a)).
 data Tree : Type where
@@ -114,3 +118,260 @@ claimPayee M c = witness (payload c)
 
 claimAmount : (M : CMon) → (c : Claim M) → cmCarrier M
 claimAmount M c = payload (payload c)
+
+-- A pair of ℕ. A bare pack has no type to infer, so flagIf and ind take
+-- this typed form.
+pairNN : (a : ℕ) → (b : ℕ) → ℕ × ℕ
+pairNN a b = pack a b
+
+-- The fault bound f(n) = (n - 1) / 3 rounded down (L240), by ind over ℕ on
+-- a counter (quotient, remainder mod 3). The builtins have no division.
+faultStep : (s : ℕ × ℕ) → ℕ × ℕ
+faultStep s = flagIf (natEq (payload s) 2) (pairNN (natAdd (witness s) 1) 0) (pairNN (witness s) (natAdd (payload s) 1))
+
+faultBound : (n : ℕ) → ℕ
+faultBound n = witness (ind (λ (m : ℕ) → ℕ × ℕ) (pairNN 0 0) (λ (j : ℕ) (s : ℕ × ℕ) → faultStep s) (natSub n 1))
+
+natLt : (a : ℕ) → (b : ℕ) → Bool
+natLt a b = flagIf (natLe b a) false true
+
+-- A tally c : D_E + {bot} -> ℕ with sum c = n (Def 2.2, L236): the counts
+-- of Release, Refund, Hold and bot, and a proof that the sum is n. A tally
+-- represents the orbit X // Sym(M) (Q7 (a), no HIT).
+Tally : (n : ℕ) → Type 0
+Tally n = (cRel : ℕ) × (cRef : ℕ) × (cHold : ℕ) × (cBot : ℕ) × Eq ℕ (natAdd (natAdd (natAdd cRel cRef) cHold) cBot) n
+
+tallyRelease : (n : ℕ) → (c : Tally n) → ℕ
+tallyRelease n c = witness c
+
+tallyRefund : (n : ℕ) → (c : Tally n) → ℕ
+tallyRefund n c = witness (payload c)
+
+tallyHold : (n : ℕ) → (c : Tally n) → ℕ
+tallyHold n c = witness (payload (payload c))
+
+tallyBot : (n : ℕ) → (c : Tally n) → ℕ
+tallyBot n c = witness (payload (payload (payload c)))
+
+tallySum : (n : ℕ) → (c : Tally n) → Eq ℕ (natAdd (natAdd (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c)) (tallyBot n c)) n
+tallySum n c = payload (payload (payload (payload c)))
+
+-- The threshold rule theta_t (Ex 2.5): Release if c(Release) >= t, Refund
+-- if c(Refund) >= t, else Hold.
+thetaThreshold : (n : ℕ) → (t : ℕ) → (c : Tally n) → DecE
+thetaThreshold n t c = flagIf (natLe t (tallyRelease n c)) decRelease (flagIf (natLe t (tallyRefund n c)) decRefund decHold)
+
+-- Ready_t(X) if and only if n - tau(X)(bot) >= t (Def 2.3).
+tallyReady : (n : ℕ) → (t : ℕ) → (c : Tally n) → Bool
+tallyReady n t c = natLe t (natSub n (tallyBot n c))
+
+-- The constitution kappa = (M, t, tA, theta) (Def 2.1, L234). The member
+-- set M is a FreeMon Address with strictly ascending keys (D40), and n is
+-- its length. theta takes a Tally n, so F = theta o tau is constant on
+-- orbits (W3 by construction, Q7).
+Kappa : Type 0
+Kappa = (members : FreeMon Address) × (thr : ℕ) × (thrA : ℕ) × ((c : Tally (fmLength Address members)) → DecE)
+
+kappaMembers : (k : Kappa) → FreeMon Address
+kappaMembers k = witness k
+
+kappaN : (k : Kappa) → ℕ
+kappaN k = fmLength Address (kappaMembers k)
+
+kappaT : (k : Kappa) → ℕ
+kappaT k = witness (payload k)
+
+kappaTA : (k : Kappa) → ℕ
+kappaTA k = witness (payload (payload k))
+
+kappaTheta : (k : Kappa) → (c : Tally (kappaN k)) → DecE
+kappaTheta k c = payload (payload (payload k)) c
+
+-- The keys of xs ascend strictly, so M is a set (D40). The optional
+-- previous key allows a first key of 0 without computing any successor.
+kappaAscending : (xs : FreeMon Address) → Bool
+kappaAscending xs = ind (λ (x : FreeMon Address) → (lo : Option ℕ) → Bool) (λ (lo : Option ℕ) → true) (λ (h : Address) (t : FreeMon Address) (r : (lo : Option ℕ) → Bool) (lo : Option ℕ) → flagIf (option true (λ (p : ℕ) → natLt p (addressKey h)) lo) (r (some (addressKey h))) false) xs none
+
+-- W1: n + f(n) < 2t and t <= n - f(n). W2: t <= tA <= n (Def 2.4).
+kappaW1Of : (n : ℕ) → (t : ℕ) → Bool
+kappaW1Of n t = flagIf (natLt (natAdd n (faultBound n)) (natAdd t t)) (natLe t (natSub n (faultBound n))) false
+
+kappaW2Of : (n : ℕ) → (t : ℕ) → (tA : ℕ) → Bool
+kappaW2Of n t tA = flagIf (natLe t tA) (natLe tA n) false
+
+kappaW1 : (k : Kappa) → Bool
+kappaW1 k = kappaW1Of (kappaN k) (kappaT k)
+
+kappaW2 : (k : Kappa) → Bool
+kappaW2 k = kappaW2Of (kappaN k) (kappaT k) (kappaTA k)
+
+-- kappa is well formed if its keys ascend and W1 and W2 hold. W3 holds by
+-- the type of theta.
+kappaWellFormed : (k : Kappa) → Bool
+kappaWellFormed k = flagIf (kappaAscending (kappaMembers k)) (flagIf (kappaW1 k) (kappaW2 k) false) false
+
+-- K_wf: the well-formed constitutions (Q1 (a)).
+KappaWf : Type 0
+KappaWf = (k : Kappa) × Eq Bool (kappaWellFormed k) true
+
+-- natAdd (natAdd k 1) a = natAdd (natAdd k a) 1, by ind on a. Conv moves
+-- 1 out of the right argument only, so the tally steps use this proof.
+natAddOneL : (k : ℕ) → (a : ℕ) → Eq ℕ (natAdd (natAdd k 1) a) (natAdd (natAdd k a) 1)
+natAddOneL k a = ind (λ (m : ℕ) → Eq ℕ (natAdd (natAdd k 1) m) (natAdd (natAdd k m) 1)) refl (λ (m : ℕ) (ih : Eq ℕ (natAdd (natAdd k 1) m) (natAdd (natAdd k m) 1)) → cong (λ (x : ℕ) → natAdd x 1) ih) a
+
+-- tau(X)(d) = |X^{-1}(d)| (Def 2.2, L236). A ballot vector X is a FreeMon
+-- (Option DecE) in key order, and none is bot. Each step adds 1 to one
+-- count and to n.
+tallyZero : Tally 0
+tallyZero = pack 0 (pack 0 (pack 0 (pack 0 refl)))
+
+tallyAddBot : (n : ℕ) → (c : Tally n) → Tally (natAdd n 1)
+tallyAddBot n c = pack (tallyRelease n c) (pack (tallyRefund n c) (pack (tallyHold n c) (pack (natAdd (tallyBot n c) 1) (cong (λ (y : ℕ) → natAdd y 1) (tallySum n c)))))
+
+tallyAddHold : (n : ℕ) → (c : Tally n) → Tally (natAdd n 1)
+tallyAddHold n c = pack (tallyRelease n c) (pack (tallyRefund n c) (pack (natAdd (tallyHold n c) 1) (pack (tallyBot n c) (trans (natAddOneL (natAdd (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c)) (tallyBot n c)) (cong (λ (y : ℕ) → natAdd y 1) (tallySum n c))))))
+
+tallyAddRefund : (n : ℕ) → (c : Tally n) → Tally (natAdd n 1)
+tallyAddRefund n c = pack (tallyRelease n c) (pack (natAdd (tallyRefund n c) 1) (pack (tallyHold n c) (pack (tallyBot n c) (trans (cong (λ (y : ℕ) → natAdd y (tallyBot n c)) (natAddOneL (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c))) (trans (natAddOneL (natAdd (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c)) (tallyBot n c)) (cong (λ (y : ℕ) → natAdd y 1) (tallySum n c)))))))
+
+tallyAddRelease : (n : ℕ) → (c : Tally n) → Tally (natAdd n 1)
+tallyAddRelease n c = pack (natAdd (tallyRelease n c) 1) (pack (tallyRefund n c) (pack (tallyHold n c) (pack (tallyBot n c) (trans (cong (λ (y : ℕ) → natAdd (natAdd y (tallyHold n c)) (tallyBot n c)) (natAddOneL (tallyRelease n c) (tallyRefund n c))) (trans (cong (λ (y : ℕ) → natAdd y (tallyBot n c)) (natAddOneL (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c))) (trans (natAddOneL (natAdd (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c)) (tallyBot n c)) (cong (λ (y : ℕ) → natAdd y 1) (tallySum n c))))))))
+
+tallyAddDec : (n : ℕ) → (c : Tally n) → (d : DecE) → Tally (natAdd n 1)
+tallyAddDec n c d = ind (λ (e : DecE) → Tally (natAdd n 1)) (tallyAddRelease n c) (tallyAddRefund n c) (tallyAddHold n c) d
+
+tallyAdd : (n : ℕ) → (x : Option DecE) → (c : Tally n) → Tally (natAdd n 1)
+tallyAdd n x c = option (tallyAddBot n c) (λ (d : DecE) → tallyAddDec n c d) x
+
+tauE : (xs : FreeMon (Option DecE)) → Tally (fmLength (Option DecE) xs)
+tauE xs = ind (λ (x : FreeMon (Option DecE)) → Tally (fmLength (Option DecE) x)) tallyZero (λ (h : Option DecE) (t : FreeMon (Option DecE)) (ih : Tally (fmLength (Option DecE) t)) → tallyAdd (fmLength (Option DecE) t) h ih) xs
+
+-- F = theta o tau (Def 2.4). F reads X only through tau(X), so F is
+-- constant on orbits (W3). The proof e gives the length n of X.
+kappaF : (k : Kappa) → (xs : FreeMon (Option DecE)) → (e : Eq ℕ (fmLength (Option DecE) xs) (kappaN k)) → DecE
+kappaF k xs e = kappaTheta k (transport (λ (m : ℕ) → Tally m) e (tauE xs))
+
+-- An amendment tally c : B_A + {bot} -> ℕ with sum c = n (L226): the
+-- counts of Adopt, Reject and bot, and a proof that the sum is n.
+TallyA : (n : ℕ) → Type 0
+TallyA n = (cAdopt : ℕ) × (cReject : ℕ) × (cBot : ℕ) × Eq ℕ (natAdd (natAdd cAdopt cReject) cBot) n
+
+tallyAdopt : (n : ℕ) → (c : TallyA n) → ℕ
+tallyAdopt n c = witness c
+
+tallyReject : (n : ℕ) → (c : TallyA n) → ℕ
+tallyReject n c = witness (payload c)
+
+tallyABot : (n : ℕ) → (c : TallyA n) → ℕ
+tallyABot n c = witness (payload (payload c))
+
+tallyASum : (n : ℕ) → (c : TallyA n) → Eq ℕ (natAdd (natAdd (tallyAdopt n c) (tallyReject n c)) (tallyABot n c)) n
+tallyASum n c = payload (payload (payload c))
+
+-- tau(Y) on an amendment ballot vector Y : FreeMon (Option BallotA).
+tallyAZero : TallyA 0
+tallyAZero = pack 0 (pack 0 (pack 0 refl))
+
+tallyAAddBot : (n : ℕ) → (c : TallyA n) → TallyA (natAdd n 1)
+tallyAAddBot n c = pack (tallyAdopt n c) (pack (tallyReject n c) (pack (natAdd (tallyABot n c) 1) (cong (λ (y : ℕ) → natAdd y 1) (tallyASum n c))))
+
+tallyAAddReject : (n : ℕ) → (c : TallyA n) → TallyA (natAdd n 1)
+tallyAAddReject n c = pack (tallyAdopt n c) (pack (natAdd (tallyReject n c) 1) (pack (tallyABot n c) (trans (natAddOneL (natAdd (tallyAdopt n c) (tallyReject n c)) (tallyABot n c)) (cong (λ (y : ℕ) → natAdd y 1) (tallyASum n c)))))
+
+tallyAAddAdopt : (n : ℕ) → (c : TallyA n) → TallyA (natAdd n 1)
+tallyAAddAdopt n c = pack (natAdd (tallyAdopt n c) 1) (pack (tallyReject n c) (pack (tallyABot n c) (trans (cong (λ (y : ℕ) → natAdd y (tallyABot n c)) (natAddOneL (tallyAdopt n c) (tallyReject n c))) (trans (natAddOneL (natAdd (tallyAdopt n c) (tallyReject n c)) (tallyABot n c)) (cong (λ (y : ℕ) → natAdd y 1) (tallyASum n c))))))
+
+tallyAAddBallot : (n : ℕ) → (c : TallyA n) → (v : BallotA) → TallyA (natAdd n 1)
+tallyAAddBallot n c v = ind (λ (e : BallotA) → TallyA (natAdd n 1)) (tallyAAddAdopt n c) (tallyAAddReject n c) v
+
+tallyAAdd : (n : ℕ) → (x : Option BallotA) → (c : TallyA n) → TallyA (natAdd n 1)
+tallyAAdd n x c = option (tallyAAddBot n c) (λ (v : BallotA) → tallyAAddBallot n c v) x
+
+tauA : (ys : FreeMon (Option BallotA)) → TallyA (fmLength (Option BallotA) ys)
+tauA ys = ind (λ (y : FreeMon (Option BallotA)) → TallyA (fmLength (Option BallotA) y)) tallyAZero (λ (h : Option BallotA) (t : FreeMon (Option BallotA)) (ih : TallyA (fmLength (Option BallotA) t)) → tallyAAdd (fmLength (Option BallotA) t) h ih) ys
+
+-- The amendment rule Amd_tA (L395): Adopt if c(Adopt) >= tA, Reject if
+-- c(Reject) > n - tA, else Hold. The two cases exclude each other.
+amdThreshold : (n : ℕ) → (tA : ℕ) → (c : TallyA n) → DecA
+amdThreshold n tA c = flagIf (natLe tA (tallyAdopt n c)) amendAdopt (flagIf (natLt (natSub n tA) (tallyReject n c)) amendReject amendHold)
+
+kappaAmd : (k : Kappa) → (c : TallyA (kappaN k)) → DecA
+kappaAmd k c = amdThreshold (kappaN k) (kappaTA k) c
+
+-- T M Z (Q-S2b-2): the composite Option (Z × FreeMon (Voucher M)) of
+-- Q5. The value none is a stop. The value some (z, o) is a result z and
+-- the output o. emit v none = none holds by construction.
+T : (M : CMon) → (Z : Type 0) → Type 0
+T M Z = Option (Z × FreeMon (Voucher M))
+
+tOut : (M : CMon) → (Z : Type 0) → (z : Z) → (o : FreeMon (Voucher M)) → T M Z
+tOut M Z z o = some (pack z o)
+
+tRet : (M : CMon) → (Z : Type 0) → (z : Z) → T M Z
+tRet M Z z = tOut M Z z (fmNil (Voucher M))
+
+tNone : (M : CMon) → (Z : Type 0) → T M Z
+tNone M Z = none
+
+-- tPre M Z o t puts the output o before the output of t.
+tPre : (M : CMon) → (Z : Type 0) → (o : FreeMon (Voucher M)) → (t : T M Z) → T M Z
+tPre M Z o t = option none (λ (q : Z × FreeMon (Voucher M)) → tOut M Z (witness q) (fmAppend (Voucher M) o (payload q))) t
+
+tEmit : (M : CMon) → (Z : Type 0) → (v : Voucher M) → (t : T M Z) → T M Z
+tEmit M Z v t = tPre M Z (fmCons (Voucher M) v (fmNil (Voucher M))) t
+
+tBind : (M : CMon) → (Y : Type 0) → (Z : Type 0) → (t : T M Y) → (f : (y : Y) → T M Z) → T M Z
+tBind M Y Z t f = option none (λ (p : Y × FreeMon (Voucher M)) → tPre M Z (payload p) (f (witness p))) t
+
+-- The Kleisli arrow a >=> b (L285).
+tKleisli : (M : CMon) → (X : Type 0) → (Y : Type 0) → (Z : Type 0) → (a : (x : X) → T M Y) → (b : (y : Y) → T M Z) → (x : X) → T M Z
+tKleisli M X Y Z a b x = tBind M Y Z (a x) b
+
+-- The laws of T, by ind on Option and on FreeMon (fmUnitR, fmAssoc).
+tPreNil : (M : CMon) → (Z : Type 0) → (t : T M Z) → Eq (T M Z) (tPre M Z (fmNil (Voucher M)) t) t
+tPreNil M Z t = ind (λ (u : T M Z) → Eq (T M Z) (tPre M Z (fmNil (Voucher M)) u) u) refl (λ (q : Z × FreeMon (Voucher M)) → refl) t
+
+tPrePre : (M : CMon) → (Z : Type 0) → (o : FreeMon (Voucher M)) → (o2 : FreeMon (Voucher M)) → (t : T M Z) → Eq (T M Z) (tPre M Z (fmAppend (Voucher M) o o2) t) (tPre M Z o (tPre M Z o2 t))
+tPrePre M Z o o2 t = ind (λ (u : T M Z) → Eq (T M Z) (tPre M Z (fmAppend (Voucher M) o o2) u) (tPre M Z o (tPre M Z o2 u))) refl (λ (q : Z × FreeMon (Voucher M)) → cong (λ (w : FreeMon (Voucher M)) → tOut M Z (witness q) w) (fmAssoc (Voucher M) o o2 (payload q))) t
+
+tBindPre : (M : CMon) → (Y : Type 0) → (Z : Type 0) → (o : FreeMon (Voucher M)) → (t : T M Y) → (g : (y : Y) → T M Z) → Eq (T M Z) (tBind M Y Z (tPre M Y o t) g) (tPre M Z o (tBind M Y Z t g))
+tBindPre M Y Z o t g = ind (λ (u : T M Y) → Eq (T M Z) (tBind M Y Z (tPre M Y o u) g) (tPre M Z o (tBind M Y Z u g))) refl (λ (q : Y × FreeMon (Voucher M)) → tPrePre M Z o (payload q) (g (witness q))) t
+
+tUnitL : (M : CMon) → (Y : Type 0) → (Z : Type 0) → (y : Y) → (f : (y : Y) → T M Z) → Eq (T M Z) (tBind M Y Z (tRet M Y y) f) (f y)
+tUnitL M Y Z y f = tPreNil M Z (f y)
+
+tUnitR : (M : CMon) → (Z : Type 0) → (t : T M Z) → Eq (T M Z) (tBind M Z Z t (tRet M Z)) t
+tUnitR M Z t = ind (λ (u : T M Z) → Eq (T M Z) (tBind M Z Z u (tRet M Z)) u) refl (λ (q : Z × FreeMon (Voucher M)) → cong (λ (w : FreeMon (Voucher M)) → tOut M Z (witness q) w) (fmUnitR (Voucher M) (payload q))) t
+
+tAssoc : (M : CMon) → (X : Type 0) → (Y : Type 0) → (Z : Type 0) → (t : T M X) → (f : (x : X) → T M Y) → (g : (y : Y) → T M Z) → Eq (T M Z) (tBind M Y Z (tBind M X Y t f) g) (tBind M X Z t (λ (x : X) → tBind M Y Z (f x) g))
+tAssoc M X Y Z t f g = ind (λ (u : T M X) → Eq (T M Z) (tBind M Y Z (tBind M X Y u f) g) (tBind M X Z u (λ (x : X) → tBind M Y Z (f x) g))) refl (λ (q : X × FreeMon (Voucher M)) → tBindPre M Y Z (payload q) (f (witness q)) g) t
+
+-- The Kleisli laws (L285 to L289): two units and associativity.
+tKUnitL : (M : CMon) → (X : Type 0) → (Y : Type 0) → (a : (x : X) → T M Y) → (x : X) → Eq (T M Y) (tKleisli M X X Y (tRet M X) a x) (a x)
+tKUnitL M X Y a x = tUnitL M X Y x a
+
+tKUnitR : (M : CMon) → (X : Type 0) → (Y : Type 0) → (a : (x : X) → T M Y) → (x : X) → Eq (T M Y) (tKleisli M X Y Y a (tRet M Y) x) (a x)
+tKUnitR M X Y a x = tUnitR M Y (a x)
+
+tKAssoc : (M : CMon) → (W : Type 0) → (X : Type 0) → (Y : Type 0) → (Z : Type 0) → (a : (w : W) → T M X) → (b : (x : X) → T M Y) → (c : (y : Y) → T M Z) → (w : W) → Eq (T M Z) (tKleisli M W Y Z (tKleisli M W X Y a b) c w) (tKleisli M W X Z a (tKleisli M X Y Z b c) w)
+tKAssoc M W X Y Z a b c w = tAssoc M X Y Z (a w) b c
+
+-- The transcript fold of Thm 3.1 (L287 to L289): sem eps = eta and
+-- sem (x w) = op x >=> sem w, generic over an op X -> S -> T M S.
+tSem : (M : CMon) → (X : Type 0) → (S : Type 0) → (op : (x : X) → (s : S) → T M S) → (w : FreeMon X) → (s : S) → T M S
+tSem M X S op w = fold (tRet M S) (λ (h : X) (acc : (s : S) → T M S) → tKleisli M S S S (op h) acc) w
+
+-- tBind respects a pointwise equality of the continuations.
+tBindExt : (M : CMon) → (Y : Type 0) → (Z : Type 0) → (t : T M Y) → (f : (y : Y) → T M Z) → (g : (y : Y) → T M Z) → (e : (y : Y) → Eq (T M Z) (f y) (g y)) → Eq (T M Z) (tBind M Y Z t f) (tBind M Y Z t g)
+tBindExt M Y Z t f g e = ind (λ (u : T M Y) → Eq (T M Z) (tBind M Y Z u f) (tBind M Y Z u g)) refl (λ (q : Y × FreeMon (Voucher M)) → cong (λ (u : T M Z) → tPre M Z (payload q) u) (e (witness q))) t
+
+tSemCons : (M : CMon) → (X : Type 0) → (S : Type 0) → (op : (x : X) → (s : S) → T M S) → (x : X) → (w : FreeMon X) → (s : S) → Eq (T M S) (tSem M X S op (fmCons X x w) s) (tKleisli M S S S (op x) (tSem M X S op w) s)
+tSemCons M X S op x w s = refl
+
+-- Thm 3.1 (L287): sem eps = eta.
+tSemNil : (M : CMon) → (X : Type 0) → (S : Type 0) → (op : (x : X) → (s : S) → T M S) → Eq ((s : S) → T M S) (tSem M X S op (fmNil X)) (tRet M S)
+tSemNil M X S op = refl
+
+-- Thm 3.1 (L287): sem (w ++ w2) = sem w >=> sem w2, at each state s.
+tSemAppend : (M : CMon) → (X : Type 0) → (S : Type 0) → (op : (x : X) → (s : S) → T M S) → (w : FreeMon X) → (w2 : FreeMon X) → (s : S) → Eq (T M S) (tSem M X S op (fmAppend X w w2) s) (tKleisli M S S S (tSem M X S op w) (tSem M X S op w2) s)
+tSemAppend M X S op w w2 = ind (λ (x : FreeMon X) → (s : S) → Eq (T M S) (tSem M X S op (fmAppend X x w2) s) (tKleisli M S S S (tSem M X S op x) (tSem M X S op w2) s)) (λ (s : S) → symm (tKUnitL M S S (tSem M X S op w2) s)) (λ (h : X) (t : FreeMon X) (ih : (s : S) → Eq (T M S) (tSem M X S op (fmAppend X t w2) s) (tKleisli M S S S (tSem M X S op t) (tSem M X S op w2) s)) (s : S) → trans (tBindExt M S S (op h s) (tSem M X S op (fmAppend X t w2)) (tKleisli M S S S (tSem M X S op t) (tSem M X S op w2)) ih) (symm (tKAssoc M S S S S (op h) (tSem M X S op t) (tSem M X S op w2) s))) w

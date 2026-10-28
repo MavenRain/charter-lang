@@ -17,7 +17,7 @@ static const char *const OP_NAMES[] = {
   [OP_PACK] = "pack", [OP_REFL] = "refl", [OP_CTOR] = "?", [OP_FIRST] = "first",
   [OP_SECOND] = "second", [OP_EITHER] = "either", [OP_OPTION_ELIM] = "option",
   [OP_PURE] = "pure", [OP_MAP] = "map", [OP_BIND] = "bind", [OP_FOLD_NAT] = "fold", [OP_IND_NAT] = "ind",
-  [OP_FOLD_LIST] = "fold", [OP_FOLD_FAMILY] = "fold", [OP_IND_FAMILY] = "ind", [OP_UNFOLD] = "unfold",
+  [OP_FOLD_LIST] = "fold", [OP_FOLD_FAMILY] = "fold", [OP_IND_FAMILY] = "ind", [OP_IND_OPTION] = "ind", [OP_UNFOLD] = "unfold",
   [OP_FILTER] = "filter", [OP_WITNESS] = "witness", [OP_PAYLOAD] = "payload",
   [OP_SYMM] = "symm", [OP_TRANS] = "trans", [OP_TRANSPORT] = "transport",
   [OP_CONG] = "cong", [OP_NAT_ADD] = "natAdd", [OP_NAT_SUB] = "natSub",
@@ -35,7 +35,7 @@ static const unsigned char OP_ARITY[] = {
   [OP_CONS] = 2, [OP_PACK] = 2, [OP_REFL] = 0, [OP_CTOR] = VARIES, [OP_FIRST] = 1,
   [OP_SECOND] = 1, [OP_EITHER] = 3, [OP_OPTION_ELIM] = 3, [OP_PURE] = 1,
   [OP_MAP] = 2, [OP_BIND] = 2, [OP_FOLD_NAT] = 3, [OP_IND_NAT] = 4, [OP_FOLD_LIST] = 3,
-  [OP_FOLD_FAMILY] = VARIES, [OP_IND_FAMILY] = VARIES, [OP_UNFOLD] = 3, [OP_FILTER] = 2, [OP_WITNESS] = 1,
+  [OP_FOLD_FAMILY] = VARIES, [OP_IND_FAMILY] = VARIES, [OP_IND_OPTION] = 4, [OP_UNFOLD] = 3, [OP_FILTER] = 2, [OP_WITNESS] = 1,
   [OP_PAYLOAD] = 1, [OP_SYMM] = 1, [OP_TRANS] = 2, [OP_TRANSPORT] = 3,
   [OP_CONG] = 2, [OP_NAT_ADD] = 2, [OP_NAT_SUB] = 2, [OP_NAT_MUL] = 2,
   [OP_NAT_EQ] = 2, [OP_NAT_LE] = 2, [OP_FLAG_IF] = 3, [OP_PROJ] = 1
@@ -412,6 +412,19 @@ static const Value *reduce_option(Machine *m, const Value *const *a, uint32_t n)
   if (val_is(a[2], OP_SOME))
     return apply_value(m, a[1], a[2]->args[0]);
   return internal(m, "an option of a value that is not an Option");
+}
+
+/* ind P n s o on the host Option (Q-S2b-2): n at none, and s x at
+   some x. */
+static const Value *reduce_ind_option(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  if (blocked(m, a[3], OP_IND_OPTION, 0, 0, a, n, &out))
+    return out;
+  if (val_is(a[3], OP_NONE))
+    return a[1];
+  if (val_is(a[3], OP_SOME))
+    return apply_value(m, a[2], a[3]->args[0]);
+  return internal(m, "an ind of a value that is not an Option");
 }
 
 static const Value *reduce_pure(Machine *m, uint32_t inst, const Value *x) {
@@ -976,6 +989,8 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
     return fold_family(m, inst, a, n - 1u, a[n - 1u]);
   case OP_IND_FAMILY:
     return ind_family(m, inst, a, n);
+  case OP_IND_OPTION:
+    return reduce_ind_option(m, a, n);
   case OP_UNFOLD:
     return reduce_unfold(m, a, n);
   case OP_FILTER:
