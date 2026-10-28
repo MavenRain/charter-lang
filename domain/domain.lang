@@ -375,3 +375,317 @@ tSemNil M X S op = refl
 -- Thm 3.1 (L287): sem (w ++ w2) = sem w >=> sem w2, at each state s.
 tSemAppend : (M : CMon) → (X : Type 0) → (S : Type 0) → (op : (x : X) → (s : S) → T M S) → (w : FreeMon X) → (w2 : FreeMon X) → (s : S) → Eq (T M S) (tSem M X S op (fmAppend X w w2) s) (tKleisli M S S S (tSem M X S op w) (tSem M X S op w2) s)
 tSemAppend M X S op w w2 = ind (λ (x : FreeMon X) → (s : S) → Eq (T M S) (tSem M X S op (fmAppend X x w2) s) (tKleisli M S S S (tSem M X S op x) (tSem M X S op w2) s)) (λ (s : S) → symm (tKUnitL M S S (tSem M X S op w2) s)) (λ (h : X) (t : FreeMon X) (ih : (s : S) → Eq (T M S) (tSem M X S op (fmAppend X t w2) s) (tKleisli M S S S (tSem M X S op t) (tSem M X S op w2) s)) (s : S) → trans (tBindExt M S S (op h s) (tSem M X S op (fmAppend X t w2)) (tKleisli M S S S (tSem M X S op t) (tSem M X S op w2)) ih) (symm (tKAssoc M S S S S (op h) (tSem M X S op t) (tSem M X S op w2) s))) w
+
+-- A receipt iota of the rail: an opaque key and its value nu(iota) (D53).
+data Receipt (M : CMon) : Type where
+  receipt : (receiptKey : ℕ) → (receiptValue : cmCarrier M) → Receipt M
+
+receiptId : (M : CMon) → (r : Receipt M) → ℕ
+receiptId M r = ind (λ (x : Receipt M) → ℕ) (λ (k : ℕ) (v : cmCarrier M) → k) r
+
+receiptNu : (M : CMon) → (r : Receipt M) → cmCarrier M
+receiptNu M r = ind (λ (x : Receipt M) → cmCarrier M) (λ (k : ℕ) (v : cmCarrier M) → v) r
+
+-- A map keyed by ℕ (D52): a list of entries whose keys ascend strictly.
+-- nmapSet keeps that order, so two maps with the same entries are the
+-- same list. A key that is not in the map gives none.
+nmapGet : (V : Type 0) → (m : FreeMon (ℕ × V)) → (c : ℕ) → Option V
+nmapGet V m c = ind (λ (x : FreeMon (ℕ × V)) → Option V) none (λ (h : ℕ × V) (t : FreeMon (ℕ × V)) (ih : Option V) → flagIf (natEq (witness h) c) (some (payload h)) ih) m
+
+-- nmapSet V m c v puts the value v at the key c.
+nmapSet : (V : Type 0) → (m : FreeMon (ℕ × V)) → (c : ℕ) → (v : V) → FreeMon (ℕ × V)
+nmapSet V m c v = ind (λ (x : FreeMon (ℕ × V)) → FreeMon (ℕ × V)) (fmCons (ℕ × V) (pack c v) (fmNil (ℕ × V))) (λ (h : ℕ × V) (t : FreeMon (ℕ × V)) (ih : FreeMon (ℕ × V)) → flagIf (natEq (witness h) c) (fmCons (ℕ × V) (pack c v) t) (flagIf (natLt c (witness h)) (fmCons (ℕ × V) (pack c v) (fmCons (ℕ × V) h t)) (fmCons (ℕ × V) h ih))) m
+
+-- nmapDel V m c removes the key c.
+nmapDel : (V : Type 0) → (m : FreeMon (ℕ × V)) → (c : ℕ) → FreeMon (ℕ × V)
+nmapDel V m c = ind (λ (x : FreeMon (ℕ × V)) → FreeMon (ℕ × V)) (fmNil (ℕ × V)) (λ (h : ℕ × V) (t : FreeMon (ℕ × V)) (ih : FreeMon (ℕ × V)) → flagIf (natEq (witness h) c) t (fmCons (ℕ × V) h ih)) m
+
+-- A map Address -> A (ledger and credit), keyed by addressKey. An address
+-- that is not in the map has the value 0 of A.
+Ledger : (M : CMon) → Type 0
+Ledger M = FreeMon (ℕ × cmCarrier M)
+
+ledgerGet : (M : CMon) → (m : Ledger M) → (a : Address) → cmCarrier M
+ledgerGet M m a = option (cmZero M) (λ (x : cmCarrier M) → x) (nmapGet (cmCarrier M) m (addressKey a))
+
+-- ledgerAdd M m a n adds n to the value of a.
+ledgerAdd : (M : CMon) → (m : Ledger M) → (a : Address) → (n : cmCarrier M) → Ledger M
+ledgerAdd M m a n = nmapSet (cmCarrier M) m (addressKey a) (cmAdd M (ledgerGet M m a) n)
+
+-- ledgerSub M m a n subtracts n from the value of a. The value none
+-- means that n is more than the value of a.
+ledgerSub : (M : CMon) → (m : Ledger M) → (a : Address) → (n : cmCarrier M) → Option (Ledger M)
+ledgerSub M m a n = option none (λ (d : cmCarrier M) → some (nmapSet (cmCarrier M) m (addressKey a) d)) (cmMonus M (ledgerGet M m a) n)
+
+-- The spent set: the keys of the spent receipts.
+spentHas : (s : FreeMon ℕ) → (k : ℕ) → Bool
+spentHas s k = fold false (λ (h : ℕ) (acc : Bool) → flagIf (natEq h k) true acc) s
+
+-- The configuration bot^M of escrow ballots: one none for each member.
+botEOf : (xs : FreeMon Address) → FreeMon (Option DecE)
+botEOf xs = ind (λ (x : FreeMon Address) → FreeMon (Option DecE)) (fmNil (Option DecE)) (λ (h : Address) (t : FreeMon Address) (ih : FreeMon (Option DecE)) → fmCons (Option DecE) none ih) xs
+
+botE : (k : Kappa) → FreeMon (Option DecE)
+botE k = botEOf (kappaMembers k)
+
+-- bot^M has the length n of M, so tauE gives a Tally n.
+botELen : (xs : FreeMon Address) → Eq ℕ (fmLength (Option DecE) (botEOf xs)) (fmLength Address xs)
+botELen xs = ind (λ (x : FreeMon Address) → Eq ℕ (fmLength (Option DecE) (botEOf x)) (fmLength Address x)) refl (λ (h : Address) (t : FreeMon Address) (ih : Eq ℕ (fmLength (Option DecE) (botEOf t)) (fmLength Address t)) → cong (λ (y : ℕ) → natAdd y 1) ih) xs
+
+-- The configuration bot^M of amendment ballots.
+botAOf : (xs : FreeMon Address) → FreeMon (Option BallotA)
+botAOf xs = ind (λ (x : FreeMon Address) → FreeMon (Option BallotA)) (fmNil (Option BallotA)) (λ (h : Address) (t : FreeMon Address) (ih : FreeMon (Option BallotA)) → fmCons (Option BallotA) none ih) xs
+
+botA : (k : Kappa) → FreeMon (Option BallotA)
+botA k = botAOf (kappaMembers k)
+
+botALen : (xs : FreeMon Address) → Eq ℕ (fmLength (Option BallotA) (botAOf xs)) (fmLength Address xs)
+botALen xs = ind (λ (x : FreeMon Address) → Eq ℕ (fmLength (Option BallotA) (botAOf x)) (fmLength Address x)) refl (λ (h : Address) (t : FreeMon Address) (ih : Eq ℕ (fmLength (Option BallotA) (botAOf t)) (fmLength Address t)) → cong (λ (y : ℕ) → natAdd y 1) ih) xs
+
+-- An open motion (Gamma_A): the proposed kappa' and the configuration of
+-- the amendment ballots. A closed motion leaves the map (D54).
+Motion : Type 0
+Motion = Kappa × FreeMon (Option BallotA)
+
+motionKappa : (j : Motion) → Kappa
+motionKappa j = witness j
+
+motionConfig : (j : Motion) → FreeMon (Option BallotA)
+motionConfig j = payload j
+
+-- The state s: kappa, the epoch, the position pos of the next entry,
+-- ledger, credit, the open claims by index, the spent receipt keys,
+-- Gamma_E (one configuration for each open claim) and Gamma_A (each open
+-- motion). A settled claim leaves the maps (D54). L = L_kappa is not a
+-- field: the clear meaning computes it from kappa (Q7 (a)).
+St : (M : CMon) → Type 0
+St M = Kappa × ℕ × ℕ × Ledger M × Ledger M × FreeMon (ℕ × Claim M) × FreeMon ℕ × FreeMon (ℕ × FreeMon (Option DecE)) × FreeMon (ℕ × Motion)
+
+stMk : (M : CMon) → (k : Kappa) → (e : ℕ) → (p : ℕ) → (l : Ledger M) → (cr : Ledger M) → (cl : FreeMon (ℕ × Claim M)) → (sp : FreeMon ℕ) → (ge : FreeMon (ℕ × FreeMon (Option DecE))) → (ga : FreeMon (ℕ × Motion)) → St M
+stMk M k e p l cr cl sp ge ga = pack k (pack e (pack p (pack l (pack cr (pack cl (pack sp (pack ge ga)))))))
+
+stKappa : (M : CMon) → (s : St M) → Kappa
+stKappa M s = witness s
+
+stEpoch : (M : CMon) → (s : St M) → ℕ
+stEpoch M s = witness (payload s)
+
+stPos : (M : CMon) → (s : St M) → ℕ
+stPos M s = witness (payload (payload s))
+
+stLedger : (M : CMon) → (s : St M) → Ledger M
+stLedger M s = witness (payload (payload (payload s)))
+
+stCredit : (M : CMon) → (s : St M) → Ledger M
+stCredit M s = witness (payload (payload (payload (payload s))))
+
+stClaims : (M : CMon) → (s : St M) → FreeMon (ℕ × Claim M)
+stClaims M s = witness (payload (payload (payload (payload (payload s)))))
+
+stSpent : (M : CMon) → (s : St M) → FreeMon ℕ
+stSpent M s = witness (payload (payload (payload (payload (payload (payload s))))))
+
+stGammaE : (M : CMon) → (s : St M) → FreeMon (ℕ × FreeMon (Option DecE))
+stGammaE M s = witness (payload (payload (payload (payload (payload (payload (payload s)))))))
+
+stGammaA : (M : CMon) → (s : St M) → FreeMon (ℕ × Motion)
+stGammaA M s = payload (payload (payload (payload (payload (payload (payload (payload s)))))))
+
+-- The start state S_0 for a constitution kappa: epoch 0, position 0 and
+-- empty maps.
+stInit : (M : CMon) → (k : Kappa) → St M
+stInit M k = stMk M k 0 0 (fmNil (ℕ × cmCarrier M)) (fmNil (ℕ × cmCarrier M)) (fmNil (ℕ × Claim M)) (fmNil ℕ) (fmNil (ℕ × FreeMon (Option DecE))) (fmNil (ℕ × Motion))
+
+-- The position of the member m in xs (the first position is 0), or none
+-- if m is not a member.
+memberIndex : (xs : FreeMon Address) → (m : Address) → Option ℕ
+memberIndex xs m = ind (λ (x : FreeMon Address) → Option ℕ) none (λ (h : Address) (t : FreeMon Address) (ih : Option ℕ) → flagIf (natEq (addressKey h) (addressKey m)) (some 0) (option none (λ (i : ℕ) → some (natAdd i 1)) ih)) xs
+
+-- fmSetAt V xs v i puts v at the position i of xs. A position after the
+-- end leaves xs unchanged. The length of xs does not change.
+fmSetAt : (V : Type 0) → (xs : FreeMon V) → (v : V) → (i : ℕ) → FreeMon V
+fmSetAt V xs v = ind (λ (x : FreeMon V) → (i : ℕ) → FreeMon V) (λ (i : ℕ) → fmNil V) (λ (h : V) (t : FreeMon V) (ih : (i : ℕ) → FreeMon V) (i : ℕ) → flagIf (natEq i 0) (fmCons V v t) (fmCons V h (ih (natSub i 1)))) xs
+
+-- spentAdd s k puts the key k in the spent set s. The keys ascend, so the
+-- order of the puts does not change the list.
+spentAdd : (s : FreeMon ℕ) → (k : ℕ) → FreeMon ℕ
+spentAdd s k = ind (λ (x : FreeMon ℕ) → FreeMon ℕ) (fmCons ℕ k (fmNil ℕ)) (λ (h : ℕ) (t : FreeMon ℕ) (ih : FreeMon ℕ) → flagIf (natEq h k) (fmCons ℕ h t) (flagIf (natLt k h) (fmCons ℕ k (fmCons ℕ h t)) (fmCons ℕ h ih))) s
+
+-- stEntry M s makes an entry: pos becomes pos + 1.
+stEntry : (M : CMon) → (s : St M) → St M
+stEntry M s = stMk M (stKappa M s) (stEpoch M s) (natAdd (stPos M s) 1) (stLedger M s) (stCredit M s) (stClaims M s) (stSpent M s) (stGammaE M s) (stGammaA M s)
+
+-- stSetGammaE M s ge and stSetGammaA M s ga replace one map of s.
+stSetGammaE : (M : CMon) → (s : St M) → (ge : FreeMon (ℕ × FreeMon (Option DecE))) → St M
+stSetGammaE M s ge = stMk M (stKappa M s) (stEpoch M s) (stPos M s) (stLedger M s) (stCredit M s) (stClaims M s) (stSpent M s) ge (stGammaA M s)
+
+stSetGammaA : (M : CMon) → (s : St M) → (ga : FreeMon (ℕ × Motion)) → St M
+stSetGammaA M s ga = stMk M (stKappa M s) (stEpoch M s) (stPos M s) (stLedger M s) (stCredit M s) (stClaims M s) (stSpent M s) (stGammaE M s) ga
+
+-- deposit p q iota (L334, L347 to L349). A spent receipt gives none. If
+-- not, the ledger of p gets nu(iota), the claim (p, q, nu(iota)) gets the
+-- index pos and the configuration bot^M, the key of iota is spent and pos
+-- becomes pos + 1.
+runDeposit : (M : CMon) → (p : Address) → (q : Address) → (r : Receipt M) → (s : St M) → T M (St M)
+runDeposit M p q r s = flagIf (spentHas (stSpent M s) (receiptId M r)) (tNone M (St M)) (tRet M (St M) (stMk M (stKappa M s) (stEpoch M s) (natAdd (stPos M s) 1) (ledgerAdd M (stLedger M s) p (receiptNu M r)) (stCredit M s) (nmapSet (Claim M) (stClaims M s) (stPos M s) (pack p (pack q (receiptNu M r)))) (spentAdd (stSpent M s) (receiptId M r)) (nmapSet (FreeMon (Option DecE)) (stGammaE M s) (stPos M s) (botE (stKappa M s))) (stGammaA M s)))
+
+-- A ballot b of vote u b (L358): an escrow verdict on the claim u, or an
+-- amendment ballot on the motion u.
+data Vote : Type where
+  voteE : (voteEVerdict : DecE) → Vote
+  voteA : (voteABallot : BallotA) → Vote
+
+-- cast X (L353, L354) is always defined and makes no entry. Its state
+-- meaning is the identity for any configuration X, independent of claims.
+-- kappaF supplies the clear verdict theta(tau(X)) separately.
+runCast : (M : CMon) → (x : FreeMon (Option DecE)) → (s : St M) → T M (St M)
+runCast M x s = tRet M (St M) s
+
+-- vote m u b (L358, L541, L542): the member m puts b at its position in
+-- the configuration of u, and pos becomes pos + 1. A second vote of m
+-- replaces the first, so the length of the configuration does not change.
+-- A requester that is not in M or an unknown u gives none.
+runVote : (M : CMon) → (m : Address) → (u : ℕ) → (b : Vote) → (s : St M) → T M (St M)
+runVote M m u b s = option (tNone M (St M)) (λ (i : ℕ) → ind (λ (y : Vote) → T M (St M)) (λ (d : DecE) → option (tNone M (St M)) (λ (x : FreeMon (Option DecE)) → tRet M (St M) (stEntry M (stSetGammaE M s (nmapSet (FreeMon (Option DecE)) (stGammaE M s) u (fmSetAt (Option DecE) x (some d) i))))) (nmapGet (FreeMon (Option DecE)) (stGammaE M s) u)) (λ (v : BallotA) → option (tNone M (St M)) (λ (j : Motion) → tRet M (St M) (stEntry M (stSetGammaA M s (nmapSet Motion (stGammaA M s) u (pack (motionKappa j) (fmSetAt (Option BallotA) (motionConfig j) (some v) i)))))) (nmapGet Motion (stGammaA M s) u)) b) (memberIndex (kappaMembers (stKappa M s)) m)
+
+-- balance a (L567) and amend (L411, L412) make no entry. propose p ; q
+-- (L415 to L417) is vacuous over the discrete Obj_M.
+runBalance : (M : CMon) → (a : Address) → (s : St M) → T M (St M)
+runBalance M a s = tRet M (St M) s
+
+runAmend : (M : CMon) → (s : St M) → T M (St M)
+runAmend M s = tRet M (St M) s
+
+runPropose : (M : CMon) → (s : St M) → T M (St M)
+runPropose M s = tRet M (St M) s
+
+-- A decision for a = b on ℕ: ind on a with a Pi motive over b, then ind
+-- on b. settle uses it for the length proof of kappaF.
+natEqDec : (a : ℕ) → (b : ℕ) → Option (Eq ℕ a b)
+natEqDec a b = ind (λ (x : ℕ) → (y : ℕ) → Option (Eq ℕ x y)) (λ (y : ℕ) → ind (λ (z : ℕ) → Option (Eq ℕ 0 z)) (some refl) (λ (j : ℕ) (r : Option (Eq ℕ 0 j)) → none) y) (λ (i : ℕ) (ih : (y : ℕ) → Option (Eq ℕ i y)) (y : ℕ) → ind (λ (z : ℕ) → Option (Eq ℕ (natAdd i 1) z)) none (λ (j : ℕ) (r : Option (Eq ℕ (natAdd i 1) j)) → option none (λ (e : Eq ℕ i j) → some (cong (λ (w : ℕ) → natAdd w 1) e)) (ih j)) y) a b
+
+-- Setters of St M: the ledger and the credit, and the close of claim c
+-- (the claim and its Gamma_E entry leave their maps, D54).
+stSetBooks : (M : CMon) → (s : St M) → (l : Ledger M) → (cr : Ledger M) → St M
+stSetBooks M s l cr = stMk M (stKappa M s) (stEpoch M s) (stPos M s) l cr (stClaims M s) (stSpent M s) (stGammaE M s) (stGammaA M s)
+
+stCloseClaim : (M : CMon) → (s : St M) → (c : ℕ) → St M
+stCloseClaim M s c = stMk M (stKappa M s) (stEpoch M s) (stPos M s) (stLedger M s) (stCredit M s) (nmapDel (Claim M) (stClaims M s) c) (stSpent M s) (nmapDel (FreeMon (Option DecE)) (stGammaE M s) c) (stGammaA M s)
+
+-- settle c (L547 to L555) reads the current kappa (O-off-1). Release and
+-- Refund take n from the ledger of the payer p and add n to the credit of
+-- r (the payee q for Release, p for Refund), then close c. Hold makes an
+-- entry only.
+runSettlePay : (M : CMon) → (c : ℕ) → (p : Address) → (r : Address) → (n : cmCarrier M) → (s : St M) → T M (St M)
+runSettlePay M c p r n s = option (tNone M (St M)) (λ (l : Ledger M) → tRet M (St M) (stEntry M (stCloseClaim M (stSetBooks M s l (ledgerAdd M (stCredit M s) r n)) c))) (ledgerSub M (stLedger M s) p n)
+
+runSettleDec : (M : CMon) → (c : ℕ) → (x : Claim M) → (d : DecE) → (s : St M) → T M (St M)
+runSettleDec M c x d s = ind (λ (y : DecE) → T M (St M)) (runSettlePay M c (claimPayer M x) (claimPayee M x) (claimAmount M x) s) (runSettlePay M c (claimPayer M x) (claimPayer M x) (claimAmount M x) s) (tRet M (St M) (stEntry M s)) d
+
+-- settle stops if X_c is not ready. natEqDec gives the length proof of
+-- X_c; the value none does not occur on a valid w.
+runSettleAt : (M : CMon) → (c : ℕ) → (x : Claim M) → (xc : FreeMon (Option DecE)) → (s : St M) → T M (St M)
+runSettleAt M c x xc s = flagIf (tallyReady (fmLength (Option DecE) xc) (kappaT (stKappa M s)) (tauE xc)) (option (tNone M (St M)) (λ (e : Eq ℕ (fmLength (Option DecE) xc) (kappaN (stKappa M s))) → runSettleDec M c x (kappaF (stKappa M s) xc e) s) (natEqDec (fmLength (Option DecE) xc) (kappaN (stKappa M s)))) (tNone M (St M))
+
+-- An unknown claim or Gamma_E entry stops settle.
+runSettle : (M : CMon) → (c : ℕ) → (s : St M) → T M (St M)
+runSettle M c s = option (tNone M (St M)) (λ (x : Claim M) → option (tNone M (St M)) (λ (xc : FreeMon (Option DecE)) → runSettleAt M c x xc s) (nmapGet (FreeMon (Option DecE)) (stGammaE M s) c)) (nmapGet (Claim M) (stClaims M s) c)
+
+-- withdraw a n (L380, L381, L559 to L563): n leaves the credit of a, and
+-- the voucher (a, n, i) goes to the output at the entry index i.
+runWithdraw : (M : CMon) → (a : Address) → (n : cmCarrier M) → (s : St M) → T M (St M)
+runWithdraw M a n s = option (tNone M (St M)) (λ (cr : Ledger M) → tEmit M (St M) (pack a (pack n (stPos M s))) (tRet M (St M) (stEntry M (stSetBooks M s (stLedger M s) cr)))) (ledgerSub M (stCredit M s) a n)
+
+-- motion m kappa' (L390, L571, L572): m is a member and kappa' is well
+-- formed, else motion stops. The motion index is the entry index, and
+-- Y_j is bot^M.
+runMotion : (M : CMon) → (m : Address) → (k2 : Kappa) → (s : St M) → T M (St M)
+runMotion M m k2 s = option (tNone M (St M)) (λ (i : ℕ) → flagIf (kappaWellFormed k2) (tRet M (St M) (stEntry M (stSetGammaA M s (nmapSet Motion (stGammaA M s) (stPos M s) (pack k2 (botA (stKappa M s))))))) (tNone M (St M))) (memberIndex (kappaMembers (stKappa M s)) m)
+
+-- clear_{M'} (L403, O-off-2): each open X_c and each open Y_j' becomes
+-- bot^{M'}. The keys and the proposed kappa of each motion stay.
+clearE : (k : Kappa) → (ge : FreeMon (ℕ × FreeMon (Option DecE))) → FreeMon (ℕ × FreeMon (Option DecE))
+clearE k ge = fold (fmNil (ℕ × FreeMon (Option DecE))) (λ (h : ℕ × FreeMon (Option DecE)) (acc : FreeMon (ℕ × FreeMon (Option DecE))) → fmCons (ℕ × FreeMon (Option DecE)) (pack (witness h) (botE k)) acc) ge
+
+clearA : (k : Kappa) → (ga : FreeMon (ℕ × Motion)) → FreeMon (ℕ × Motion)
+clearA k ga = fold (fmNil (ℕ × Motion)) (λ (h : ℕ × Motion) (acc : FreeMon (ℕ × Motion)) → fmCons (ℕ × Motion) (pack (witness h) (pack (motionKappa (payload h)) (botA k))) acc) ga
+
+-- stAdopt M j k2 s: k2 is kappa', the epoch becomes e + 1, the motion j
+-- closes, and clear_{M'} sets each open configuration to bot^{M'}.
+stAdopt : (M : CMon) → (j : ℕ) → (k2 : Kappa) → (s : St M) → St M
+stAdopt M j k2 s = stMk M k2 (natAdd (stEpoch M s) 1) (stPos M s) (stLedger M s) (stCredit M s) (stClaims M s) (stSpent M s) (clearE k2 (stGammaE M s)) (clearA k2 (nmapDel Motion (stGammaA M s) j))
+
+-- enact j (L397 to L403) on the verdict d. Adopt installs kappa' of the
+-- motion and clears. Reject closes j. Hold keeps the state. Each verdict
+-- makes an entry.
+runEnactDec : (M : CMon) → (j : ℕ) → (y : Motion) → (d : DecA) → (s : St M) → T M (St M)
+runEnactDec M j y d s = ind (λ (z : DecA) → T M (St M)) (tRet M (St M) (stEntry M (stAdopt M j (motionKappa y) s))) (tRet M (St M) (stEntry M (stSetGammaA M s (nmapDel Motion (stGammaA M s) j)))) (tRet M (St M) (stEntry M s)) d
+
+-- Amd_tA of the current kappa on Y_j (L395). natEqDec gives the length
+-- proof of Y_j; the value none does not occur on a valid w.
+enactAmd : (M : CMon) → (y : Motion) → (s : St M) → Option DecA
+enactAmd M y s = option none (λ (e : Eq ℕ (fmLength (Option BallotA) (motionConfig y)) (kappaN (stKappa M s))) → some (kappaAmd (stKappa M s) (transport (λ (m : ℕ) → TallyA m) e (tauA (motionConfig y))))) (natEqDec (fmLength (Option BallotA) (motionConfig y)) (kappaN (stKappa M s)))
+
+runEnactAt : (M : CMon) → (j : ℕ) → (y : Motion) → (s : St M) → T M (St M)
+runEnactAt M j y s = option (tNone M (St M)) (λ (d : DecA) → runEnactDec M j y d s) (enactAmd M y s)
+
+-- An unknown or closed motion j stops enact.
+runEnact : (M : CMon) → (j : ℕ) → (s : St M) → T M (St M)
+runEnact M j s = option (tNone M (St M)) (λ (y : Motion) → runEnactAt M j y s) (nmapGet Motion (stGammaA M s) j)
+
+-- Thm 4.3 (L405): enact does not change the escrow part pi_E s (ledger,
+-- credit, claims and spent). escrowOf gives pi_E of the result, and
+-- escrowAs puts e as the result. Each branch of runEnactDec keeps the
+-- escrow part, so the proof is by ind on DecA, then by ind on Option.
+Escrow : (M : CMon) → Type 0
+Escrow M = Ledger M × Ledger M × FreeMon (ℕ × Claim M) × FreeMon ℕ
+
+stEscrow : (M : CMon) → (s : St M) → Escrow M
+stEscrow M s = pack (stLedger M s) (pack (stCredit M s) (pack (stClaims M s) (stSpent M s)))
+
+escrowOf : (M : CMon) → (t : T M (St M)) → T M (Escrow M)
+escrowOf M t = tBind M (St M) (Escrow M) t (λ (s2 : St M) → tRet M (Escrow M) (stEscrow M s2))
+
+escrowAs : (M : CMon) → (t : T M (St M)) → (e : Escrow M) → T M (Escrow M)
+escrowAs M t e = tBind M (St M) (Escrow M) t (λ (s2 : St M) → tRet M (Escrow M) e)
+
+enactEscrowDec : (M : CMon) → (j : ℕ) → (y : Motion) → (d : DecA) → (s : St M) → Eq (T M (Escrow M)) (escrowOf M (runEnactDec M j y d s)) (escrowAs M (runEnactDec M j y d s) (stEscrow M s))
+enactEscrowDec M j y d s = ind (λ (z : DecA) → Eq (T M (Escrow M)) (escrowOf M (runEnactDec M j y z s)) (escrowAs M (runEnactDec M j y z s) (stEscrow M s))) refl refl refl d
+
+enactEscrowAt : (M : CMon) → (j : ℕ) → (y : Motion) → (s : St M) → Eq (T M (Escrow M)) (escrowOf M (runEnactAt M j y s)) (escrowAs M (runEnactAt M j y s) (stEscrow M s))
+enactEscrowAt M j y s = ind (λ (p : Option DecA) → Eq (T M (Escrow M)) (escrowOf M (option (tNone M (St M)) (λ (d : DecA) → runEnactDec M j y d s) p)) (escrowAs M (option (tNone M (St M)) (λ (d : DecA) → runEnactDec M j y d s) p) (stEscrow M s))) refl (λ (d : DecA) → enactEscrowDec M j y d s) (enactAmd M y s)
+
+enactEscrow : (M : CMon) → (j : ℕ) → (s : St M) → Eq (T M (Escrow M)) (escrowOf M (runEnact M j s)) (escrowAs M (runEnact M j s) (stEscrow M s))
+enactEscrow M j s = ind (λ (o : Option Motion) → Eq (T M (Escrow M)) (escrowOf M (option (tNone M (St M)) (λ (y : Motion) → runEnactAt M j y s) o)) (escrowAs M (option (tNone M (St M)) (λ (y : Motion) → runEnactAt M j y s) o) (stEscrow M s))) refl (λ (y : Motion) → enactEscrowAt M j y s) (nmapGet Motion (stGammaA M s) j)
+
+-- One transcript entry: one constructor for each operation of PLAN 3.2.
+-- The requester (m of vote and motion, a of withdraw and balance) is a
+-- field. amend and propose are identities, so they have no field.
+data Op (M : CMon) : Type where
+  opDeposit : (opDepositPayer : Address) → (opDepositPayee : Address) → (opDepositReceipt : Receipt M) → Op M
+  opCast : (opCastConfig : FreeMon (Option DecE)) → Op M
+  opVote : (opVoteMember : Address) → (opVoteIndex : ℕ) → (opVoteBallot : Vote) → Op M
+  opSettle : (opSettleClaim : ℕ) → Op M
+  opWithdraw : (opWithdrawRequester : Address) → (opWithdrawAmount : cmCarrier M) → Op M
+  opBalance : (opBalanceRequester : Address) → Op M
+  opMotion : (opMotionMember : Address) → (opMotionKappa : Kappa) → Op M
+  opEnact : (opEnactMotion : ℕ) → Op M
+  opAmend : Op M
+  opPropose : Op M
+
+-- The op of the transcript meaning tSem M (Op M) (St M) (opStep M).
+opStep : (M : CMon) → (x : Op M) → (s : St M) → T M (St M)
+opStep M x s = ind (λ (y : Op M) → T M (St M)) (λ (p : Address) (q : Address) (r : Receipt M) → runDeposit M p q r s) (λ (xc : FreeMon (Option DecE)) → runCast M xc s) (λ (m : Address) (u : ℕ) (b : Vote) → runVote M m u b s) (λ (c : ℕ) → runSettle M c s) (λ (a : Address) (n : cmCarrier M) → runWithdraw M a n s) (λ (a : Address) → runBalance M a s) (λ (m : Address) (k : Kappa) → runMotion M m k s) (λ (j : ℕ) → runEnact M j s) (runAmend M s) (runPropose M s) x
+
+-- Invariant I (Thm 4.1): sumClaims M cl p is the sum of the amounts of
+-- the open claims of the payer p. Conservation (Thm 4.4): ledgerSum M m
+-- is the sum of the values of a ledger, and voucherSum M v is the sum of
+-- the amounts of a list of vouchers.
+sumClaims : (M : CMon) → (cl : FreeMon (ℕ × Claim M)) → (p : Address) → cmCarrier M
+sumClaims M cl p = fold (cmZero M) (λ (h : ℕ × Claim M) (acc : cmCarrier M) → flagIf (natEq (addressKey (claimPayer M (payload h))) (addressKey p)) (cmAdd M (claimAmount M (payload h)) acc) acc) cl
+
+ledgerSum : (M : CMon) → (m : Ledger M) → cmCarrier M
+ledgerSum M m = fold (cmZero M) (λ (h : ℕ × cmCarrier M) (acc : cmCarrier M) → cmAdd M (payload h) acc) m
+
+voucherSum : (M : CMon) → (v : FreeMon (Voucher M)) → cmCarrier M
+voucherSum M v = fold (cmZero M) (λ (h : Voucher M) (acc : cmCarrier M) → cmAdd M (voucherAmount M h) acc) v

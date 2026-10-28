@@ -287,9 +287,10 @@ for want in 'progress-part:{"parsed":"3 of 3","typed":"2 of 3","laws":"0 of 0"}'
   [ "$got" = "${want#*:}" ] || { echo "FAIL progress ${want%%:*}: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done
 # The laws count on examples/assets.lang (the natCMon laws) and on
-# examples/kappa.lang (the kappa laws): not zero, and all of the laws
+# examples/kappa.lang (the kappa laws) and on examples/escrow.lang (the
+# state types): not zero, and all of the laws
 # type-check.
-for f in assets kappa; do
+for f in assets kappa escrow; do
   laws=$(build/langc check --json "examples/$f.lang" 2>/dev/null | tail -n 1 | rg -o -r '$1' '"laws":"([0-9]+ of [0-9]+)"') || true
   if [ -z "$laws" ] || [ "${laws% of *}" != "${laws#* of }" ] || [ "${laws% of *}" = 0 ]; then
     echo "FAIL progress $f: want laws \"m of m\" with m > 0, got $laws"

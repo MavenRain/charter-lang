@@ -7,7 +7,7 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S2b)
+## Status (S2c)
 
 Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
 the leaf-lang surface; `langc fmt` with one canonical form per operation;
@@ -22,11 +22,18 @@ S2b: the dependent `ind` on the host `Option`; in `domain/domain.lang`,
 `Kappa` with the checks W1 and W2, `Tally`, `TallyA`, `tau`, `theta_t`,
 `Amd_tA`, `F = theta o tau`, `T M Z` with its Kleisli laws, and the
 transcript fold `tSem` with Thm 3.1; the S2b law rows of `docs/PLAN.md`
-section 6 in `examples/kappa.lang`. The escrow operations and the S2c laws
-are not built.
+section 6 in `examples/kappa.lang`.
+S2c: in `domain/domain.lang`, the escrow state `St M`, `Receipt M`,
+`Ledger M`, `Motion`, `Vote`, `Escrow M`, the 10 operations (`runDeposit`
+to `runEnact`, `Op M`, `opStep`) and Thm 4.3 as a general proof
+(`enactEscrow`); in `examples/escrow.lang`, the S2c law rows of
+`docs/PLAN.md` section 6: law points for Invariant I, Cor 4.2,
+Conservation and Thm 4.5 on one valid transcript, and the S2c law points
+of Prop 3.3 and 3.4.
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
-- the S2c law rows of `docs/PLAN.md` section 6 and the escrow operations (S2c).
+- Prop 3.3 and 3.4 as tests, and O-off-1 to O-off-8 (S2d).
+- the general proofs of Invariant I and Conservation (open).
 - `skills/charter-lang/SKILL.md` with 3 to 5 graded examples (S9).
 - `langc mcp`, an MCP server in C that tcc builds (S9).
 - `docs/TOKEN-BASELINE.md`, token counts against Python and Rust (S9).

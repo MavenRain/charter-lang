@@ -66,7 +66,7 @@ static int runtime_ind_effect(void) {
   Front front;
   Machine machine;
   IrProgram prog;
-  arena_init(&arena, (size_t)1 << 24);
+  arena_init(&arena, (size_t)1 << 30);
   diag_init(&diag);
   int checked = front_load(&arena, "test-ind-effect", text, strlen(text), &front, &diag)
     && check_program(&arena, &front.decls, &machine, &diag);

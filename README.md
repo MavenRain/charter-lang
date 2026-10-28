@@ -7,9 +7,9 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S2b)
+## Status (S2c)
 
-S1, S2a and S2b are built. The front end has the leaf-lang surface. `langc fmt`
+S1, S2a, S2b and S2c are built. The front end has the leaf-lang surface. `langc fmt`
 prints the one canonical form, and `langc check --json` gives a JSON
 diagnostic with a fix hint and the counts parsed, typed and laws (the law
 definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
@@ -31,9 +31,19 @@ rules `theta_t` and `Amd_tA`, `F = theta o tau`, the partial writer
 `T M Z = Option (Z × FreeMon (Voucher M))` with its Kleisli laws, and the
 transcript fold `tSem` with Thm 3.1 (`SPEC.md` sections 5 and 6).
 `examples/kappa.lang` discharges the S2b law rows of `docs/PLAN.md`
-section 6 (54 of 54 laws). The escrow operations, the S2c laws and all
-crypto are not built. `make check` passes. `docs/PLAN.md` section 9 gives
-the slices.
+section 6 (54 of 54 laws).
+
+S2c adds the escrow state `St M` (`kappa`, the epoch, the entry position,
+ledger, credit, the open claims, the spent receipt keys, `Gamma_E` and
+`Gamma_A`; `SPEC.md` section 5) and the 10 operations of `docs/PLAN.md`
+3.2 with their fit to `tSem` (`opStep`; `SPEC.md` section 6).
+`examples/escrow.lang` discharges the S2c law rows of `docs/PLAN.md`
+section 6 (152 of 152 laws). Thm 4.3 has a general proof (`enactEscrow`).
+Invariant I, Cor 4.2, Conservation and Thm 4.5 have law points on one
+valid transcript from `S_0`. Their general proofs are open. Prop 3.3 and
+3.4 have law points in S2c, and their tests are in S2d. The crypto parts
+are not built. `make check` passes. `docs/PLAN.md` section 9 gives the
+slices.
 
 ## When to reach for charter-lang
 

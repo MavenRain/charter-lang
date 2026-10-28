@@ -1,0 +1,758 @@
+-- The state types of the escrow (S2c) on kappaEx4 (n = 4): the receipt,
+-- the maps keyed by ℕ, the ledger, the spent set, bot^M, the motion and
+-- the start state S_0. Each example is one program, so this file has its
+-- own copy of natCMon from examples/assets.lang.
+-- natCMon: the CMon on ℕ with natAdd and 0 (S2a, O8). Each law is a def
+-- with an Eq type, proved by ind. natMonus b a is some (natSub b a) when
+-- natLe a b, else none.
+natSuccL : (k : ℕ) → (a : ℕ) → Eq ℕ (natAdd (natAdd k 1) a) (natAdd (natAdd k a) 1)
+natSuccL k a = ind (λ (n : ℕ) → Eq ℕ (natAdd (natAdd k 1) n) (natAdd (natAdd k n) 1)) refl (λ (m : ℕ) (ih : Eq ℕ (natAdd (natAdd k 1) m) (natAdd (natAdd k m) 1)) → cong (λ (x : ℕ) → natAdd x 1) ih) a
+
+natAssoc : (a : ℕ) → (b : ℕ) → (c : ℕ) → Eq ℕ (natAdd (natAdd a b) c) (natAdd a (natAdd b c))
+natAssoc a b c = ind (λ (n : ℕ) → Eq ℕ (natAdd (natAdd a b) n) (natAdd a (natAdd b n))) refl (λ (m : ℕ) (ih : Eq ℕ (natAdd (natAdd a b) m) (natAdd a (natAdd b m))) → cong (λ (x : ℕ) → natAdd x 1) ih) c
+
+natUnitL : (a : ℕ) → Eq ℕ (natAdd 0 a) a
+natUnitL a = ind (λ (n : ℕ) → Eq ℕ (natAdd 0 n) n) refl (λ (k : ℕ) (ih : Eq ℕ (natAdd 0 k) k) → cong (λ (x : ℕ) → natAdd x 1) ih) a
+
+natUnitR : (a : ℕ) → Eq ℕ (natAdd a 0) a
+natUnitR a = refl
+
+natComm : (a : ℕ) → (b : ℕ) → Eq ℕ (natAdd a b) (natAdd b a)
+natComm a b = ind (λ (n : ℕ) → Eq ℕ (natAdd a n) (natAdd n a)) (symm (natUnitL a)) (λ (m : ℕ) (ih : Eq ℕ (natAdd a m) (natAdd m a)) → trans (cong (λ (x : ℕ) → natAdd x 1) ih) (symm (natSuccL m a))) b
+
+natCancel : (a : ℕ) → (b : ℕ) → (c : ℕ) → (e : Eq ℕ (natAdd a c) (natAdd b c)) → Eq ℕ a b
+natCancel a b c e = ind (λ (n : ℕ) → (f : Eq ℕ (natAdd a n) (natAdd b n)) → Eq ℕ a b) (λ (f : Eq ℕ a b) → f) (λ (k : ℕ) (ih : (f : Eq ℕ (natAdd a k) (natAdd b k)) → Eq ℕ a b) (f : Eq ℕ (natAdd a (natAdd k 1)) (natAdd b (natAdd k 1))) → ih (cong (λ (x : ℕ) → ind (λ (m : ℕ) → ℕ) 0 (λ (j : ℕ) (r : ℕ) → j) x) f)) c e
+
+natMonus : (x : ℕ) → (y : ℕ) → Option ℕ
+natMonus x y = flagIf (natLe y x) (some (natSub x y)) none
+
+natLeAdd : (a : ℕ) → (d : ℕ) → Eq Bool (natLe a (natAdd a d)) true
+natLeAdd a d = ind (λ (n : ℕ) → Eq Bool (natLe n (natAdd n d)) true) refl (λ (k : ℕ) (ih : Eq Bool (natLe k (natAdd k d)) true) → transport (λ (x : ℕ) → Eq Bool (natLe (natAdd k 1) x) true) (symm (natSuccL k d)) ih) a
+
+natSubAdd : (a : ℕ) → (d : ℕ) → Eq ℕ (natSub (natAdd a d) a) d
+natSubAdd a d = ind (λ (n : ℕ) → Eq ℕ (natSub (natAdd n d) n) d) (natUnitL d) (λ (k : ℕ) (ih : Eq ℕ (natSub (natAdd k d) k) d) → transport (λ (x : ℕ) → Eq ℕ (natSub x (natAdd k 1)) d) (symm (natSuccL k d)) ih) a
+
+natMonusComplete : (a : ℕ) → (d : ℕ) → Eq (Option ℕ) (natMonus (natAdd a d) a) (some d)
+natMonusComplete a d = transport (λ (f : Bool) → Eq (Option ℕ) (flagIf f (some (natSub (natAdd a d) a)) none) (some d)) (symm (natLeAdd a d)) (cong (λ (x : ℕ) → some x) (natSubAdd a d))
+
+natAbsurd : (T : Type 0) → (e : Eq ℕ 0 1) → T
+natAbsurd T e = transport (λ (n : ℕ) → ind (λ (m : ℕ) → Type 0) Unit (λ (j : ℕ) (r : Type 0) → T) n) e unit
+
+natMonusSound : (a : ℕ) → (b : ℕ) → (d : ℕ) → (e : Eq (Option ℕ) (natMonus b a) (some d)) → Eq ℕ (natAdd a d) b
+natMonusSound a b d e = ind (λ (n : ℕ) → (b1 : ℕ) → (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus b1 n) (some d1)) → Eq ℕ (natAdd n d1) b1) (λ (b1 : ℕ) (d1 : ℕ) (e1 : Eq (Option ℕ) (natMonus b1 0) (some d1)) → trans (natUnitL d1) (symm (cong (λ (o : Option ℕ) → option 0 (λ (x : ℕ) → x) o) e1))) (λ (k : ℕ) (ih : (b1 : ℕ) → (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus b1 k) (some d1)) → Eq ℕ (natAdd k d1) b1) (b1 : ℕ) → ind (λ (m : ℕ) → (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus m (natAdd k 1)) (some d1)) → Eq ℕ (natAdd (natAdd k 1) d1) m) (λ (d1 : ℕ) (e1 : Eq (Option ℕ) (natMonus 0 (natAdd k 1)) (some d1)) → natAbsurd (Eq ℕ (natAdd (natAdd k 1) d1) 0) (cong (λ (o : Option ℕ) → option 0 (λ (x : ℕ) → 1) o) e1)) (λ (j : ℕ) (ihb : (d1 : ℕ) → (e1 : Eq (Option ℕ) (natMonus j (natAdd k 1)) (some d1)) → Eq ℕ (natAdd (natAdd k 1) d1) j) (d1 : ℕ) (e1 : Eq (Option ℕ) (natMonus (natAdd j 1) (natAdd k 1)) (some d1)) → trans (natSuccL k d1) (cong (λ (x : ℕ) → natAdd x 1) (ih j d1 e1))) b1) a b d e
+
+natCMon : CMon
+natCMon = pack ℕ (pack (λ (x : ℕ) (y : ℕ) → natAdd x y) (pack 0 (pack natAssoc (pack natUnitL (pack natUnitR (pack natComm (pack natCancel (pack natMonus (pack natMonusSound natMonusComplete)))))))))
+
+members4 : FreeMon Address
+members4 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmNil Address))))
+
+kappaEx4 : Kappa
+kappaEx4 = pack members4 (pack 3 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 3 c)))
+
+-- A receipt with the key 5 and the value 40.
+receiptEx : Receipt natCMon
+receiptEx = receipt natCMon 5 40
+
+receiptIdEx : Eq ℕ (receiptId natCMon receiptEx) 5
+receiptIdEx = refl
+
+receiptNuEx : Eq ℕ (receiptNu natCMon receiptEx) 40
+receiptNuEx = refl
+
+-- A ledger with 10 at address 1 and 30 at address 3. The keys ascend for
+-- each order of the puts.
+ledgerEx : Ledger natCMon
+ledgerEx = ledgerAdd natCMon (ledgerAdd natCMon (fmNil (ℕ × ℕ)) (address 3) 30) (address 1) 10
+
+ledgerSorted : Eq (Ledger natCMon) ledgerEx (fmCons (ℕ × ℕ) (pairNN 1 10) (fmCons (ℕ × ℕ) (pairNN 3 30) (fmNil (ℕ × ℕ))))
+ledgerSorted = refl
+
+ledgerOrder : Eq (Ledger natCMon) ledgerEx (ledgerAdd natCMon (ledgerAdd natCMon (fmNil (ℕ × ℕ)) (address 1) 10) (address 3) 30)
+ledgerOrder = refl
+
+ledgerGet3 : Eq ℕ (ledgerGet natCMon ledgerEx (address 3)) 30
+ledgerGet3 = refl
+
+ledgerGet2 : Eq ℕ (ledgerGet natCMon ledgerEx (address 2)) 0
+ledgerGet2 = refl
+
+ledgerAddEx : Eq ℕ (ledgerGet natCMon (ledgerAdd natCMon ledgerEx (address 1) 5) (address 1)) 15
+ledgerAddEx = refl
+
+ledgerSubNone : Eq (Option (Ledger natCMon)) (ledgerSub natCMon ledgerEx (address 1) 20) none
+ledgerSubNone = refl
+
+ledgerSubEx : Eq (Option (Ledger natCMon)) (ledgerSub natCMon ledgerEx (address 3) 10) (some (ledgerAdd natCMon (ledgerAdd natCMon (fmNil (ℕ × ℕ)) (address 3) 20) (address 1) 10))
+ledgerSubEx = refl
+
+nmapDelEx : Eq (FreeMon (ℕ × ℕ)) (nmapDel ℕ ledgerEx 1) (fmCons (ℕ × ℕ) (pairNN 3 30) (fmNil (ℕ × ℕ)))
+nmapDelEx = refl
+
+-- The spent set {4, 9}.
+spentYes : Eq Bool (spentHas (fmCons ℕ 4 (fmCons ℕ 9 (fmNil ℕ))) 9) true
+spentYes = refl
+
+spentNo : Eq Bool (spentHas (fmCons ℕ 4 (fmCons ℕ 9 (fmNil ℕ))) 5) false
+spentNo = refl
+
+-- bot^M for n = 4, and its length.
+botE4 : Eq (FreeMon (Option DecE)) (botE kappaEx4) (fmCons (Option DecE) none (fmCons (Option DecE) none (fmCons (Option DecE) none (fmCons (Option DecE) none (fmNil (Option DecE))))))
+botE4 = refl
+
+botE4Len : Eq ℕ (fmLength (Option DecE) (botE kappaEx4)) (kappaN kappaEx4)
+botE4Len = refl
+
+botA4Len : Eq ℕ (fmLength (Option BallotA) (botA kappaEx4)) (kappaN kappaEx4)
+botA4Len = refl
+
+-- A motion that proposes kappaEx4 with no ballots.
+motionEx : Motion
+motionEx = pack kappaEx4 (botA kappaEx4)
+
+motionN : Eq ℕ (kappaN (motionKappa motionEx)) 4
+motionN = refl
+
+-- The start state S_0 and its fields.
+s0 : St natCMon
+s0 = stInit natCMon kappaEx4
+
+s0Pos : Eq ℕ (stPos natCMon s0) 0
+s0Pos = refl
+
+s0Epoch : Eq ℕ (stEpoch natCMon s0) 0
+s0Epoch = refl
+
+s0N : Eq ℕ (kappaN (stKappa natCMon s0)) 4
+s0N = refl
+
+s0Ledger : Eq ℕ (ledgerGet natCMon (stLedger natCMon s0) (address 1)) 0
+s0Ledger = refl
+
+s0Spent : Eq Bool (spentHas (stSpent natCMon s0) 5) false
+s0Spent = refl
+
+s0GammaE : Eq (Option (FreeMon (Option DecE))) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon s0) 0) none
+s0GammaE = refl
+
+-- A state with epoch 1, position 7, ledgerEx, one claim 0 of 30 from
+-- address 3 to address 2 with bot^M, and one open motion 0.
+s1 : St natCMon
+s1 = stMk natCMon kappaEx4 1 7 ledgerEx (fmNil (ℕ × ℕ)) (nmapSet (Claim natCMon) (fmNil (ℕ × Claim natCMon)) 0 (pack (address 3) (pack (address 2) 30))) (fmCons ℕ 5 (fmNil ℕ)) (nmapSet (FreeMon (Option DecE)) (fmNil (ℕ × FreeMon (Option DecE))) 0 (botE kappaEx4)) (nmapSet Motion (fmNil (ℕ × Motion)) 0 motionEx)
+
+s1Pos : Eq ℕ (stPos natCMon s1) 7
+s1Pos = refl
+
+s1Epoch : Eq ℕ (stEpoch natCMon s1) 1
+s1Epoch = refl
+
+s1Ledger : Eq ℕ (ledgerGet natCMon (stLedger natCMon s1) (address 3)) 30
+s1Ledger = refl
+
+s1Credit : Eq ℕ (ledgerGet natCMon (stCredit natCMon s1) (address 2)) 0
+s1Credit = refl
+
+s1Spent : Eq Bool (spentHas (stSpent natCMon s1) 5) true
+s1Spent = refl
+
+s1Claim : Eq ℕ (option 0 (λ (c : Claim natCMon) → claimAmount natCMon c) (nmapGet (Claim natCMon) (stClaims natCMon s1) 0)) 30
+s1Claim = refl
+
+s1GammaE : Eq (Option (FreeMon (Option DecE))) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon s1) 0) (some (botE kappaEx4))
+s1GammaE = refl
+
+s1GammaA : Eq ℕ (option 0 (λ (j : Motion) → fmLength (Option BallotA) (motionConfig j)) (nmapGet Motion (stGammaA natCMon s1) 0)) 4
+s1GammaA = refl
+
+-- The operations deposit, cast, vote, balance, amend and propose, opStep
+-- and the transcript meaning tSem on s0 and s1. exState t is the state of
+-- t, or s0 for none.
+exState : (t : T natCMon (St natCMon)) → St natCMon
+exState t = option s0 (λ (q : St natCMon × FreeMon (Voucher natCMon)) → witness q) t
+
+memberIndex3 : Eq (Option ℕ) (memberIndex members4 (address 3)) (some 2)
+memberIndex3 = refl
+
+memberIndex9 : Eq (Option ℕ) (memberIndex members4 (address 9)) none
+memberIndex9 = refl
+
+fmSetAtEx : Eq (FreeMon ℕ) (fmSetAt ℕ (fmCons ℕ 1 (fmCons ℕ 2 (fmNil ℕ))) 9 1) (fmCons ℕ 1 (fmCons ℕ 9 (fmNil ℕ)))
+fmSetAtEx = refl
+
+spentAddEx : Eq (FreeMon ℕ) (spentAdd (fmCons ℕ 4 (fmCons ℕ 9 (fmNil ℕ))) 5) (fmCons ℕ 4 (fmCons ℕ 5 (fmCons ℕ 9 (fmNil ℕ))))
+spentAddEx = refl
+
+-- A deposit of receiptEx from address 1 to address 2 on s0.
+dep0 : T natCMon (St natCMon)
+dep0 = runDeposit natCMon (address 1) (address 2) receiptEx s0
+
+dep0Pos : Eq ℕ (stPos natCMon (exState dep0)) 1
+dep0Pos = refl
+
+dep0Ledger : Eq ℕ (ledgerGet natCMon (stLedger natCMon (exState dep0)) (address 1)) 40
+dep0Ledger = refl
+
+dep0Spent : Eq Bool (spentHas (stSpent natCMon (exState dep0)) 5) true
+dep0Spent = refl
+
+dep0Claim : Eq ℕ (option 0 (λ (c : Claim natCMon) → claimAmount natCMon c) (nmapGet (Claim natCMon) (stClaims natCMon (exState dep0)) 0)) 40
+dep0Claim = refl
+
+dep0GammaE : Eq (Option (FreeMon (Option DecE))) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon (exState dep0)) 0) (some (botE kappaEx4))
+dep0GammaE = refl
+
+-- A second deposit of the same receipt gives none.
+dep0Twice : Eq (T natCMon (St natCMon)) (tBind natCMon (St natCMon) (St natCMon) dep0 (runDeposit natCMon (address 3) (address 4) receiptEx)) (tNone natCMon (St natCMon))
+dep0Twice = refl
+
+dep1Spent : Eq (T natCMon (St natCMon)) (runDeposit natCMon (address 1) (address 2) receiptEx s1) (tNone natCMon (St natCMon))
+dep1Spent = refl
+
+-- Address 3 (position 2) votes decRefund on the claim 0 of s1.
+vote1 : T natCMon (St natCMon)
+vote1 = runVote natCMon (address 3) 0 (voteE decRefund) s1
+
+vote1GammaE : Eq (Option (FreeMon (Option DecE))) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon (exState vote1)) 0) (some (fmCons (Option DecE) none (fmCons (Option DecE) none (fmCons (Option DecE) (some decRefund) (fmCons (Option DecE) none (fmNil (Option DecE)))))))
+vote1GammaE = refl
+
+vote1Len : Eq ℕ (option 0 (λ (x : FreeMon (Option DecE)) → fmLength (Option DecE) x) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon (exState vote1)) 0)) 4
+vote1Len = refl
+
+vote1Pos : Eq ℕ (stPos natCMon (exState vote1)) 8
+vote1Pos = refl
+
+voteNotMember : Eq (T natCMon (St natCMon)) (runVote natCMon (address 9) 0 (voteE decRefund) s1) (tNone natCMon (St natCMon))
+voteNotMember = refl
+
+voteNoClaim : Eq (T natCMon (St natCMon)) (runVote natCMon (address 3) 2 (voteE decRefund) s1) (tNone natCMon (St natCMon))
+voteNoClaim = refl
+
+-- Address 1 (position 0) votes ballotAdopt on the motion 0 of s1.
+voteA1 : T natCMon (St natCMon)
+voteA1 = runVote natCMon (address 1) 0 (voteA ballotAdopt) s1
+
+voteA1Config : Eq (Option (FreeMon (Option BallotA))) (option none (λ (j : Motion) → some (motionConfig j)) (nmapGet Motion (stGammaA natCMon (exState voteA1)) 0)) (some (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) none (fmCons (Option BallotA) none (fmCons (Option BallotA) none (fmNil (Option BallotA)))))))
+voteA1Config = refl
+
+cast1 : Eq (T natCMon (St natCMon)) (runCast natCMon (botE kappaEx4) s1) (tRet natCMon (St natCMon) s1)
+cast1 = refl
+
+castNoClaim : Eq (T natCMon (St natCMon)) (runCast natCMon (botE kappaEx4) s0) (tRet natCMon (St natCMon) s0)
+castNoClaim = refl
+
+castAlways : (M : CMon) → (x : FreeMon (Option DecE)) → (s : St M) → Eq (T M (St M)) (runCast M x s) (tRet M (St M) s)
+castAlways M x s = refl
+
+stepCast : Eq (T natCMon (St natCMon)) (opStep natCMon (opCast natCMon (botE kappaEx4)) s0) (tRet natCMon (St natCMon) s0)
+stepCast = refl
+
+balance1 : Eq (T natCMon (St natCMon)) (runBalance natCMon (address 2) s1) (tRet natCMon (St natCMon) s1)
+balance1 = refl
+
+stepAmend : Eq (T natCMon (St natCMon)) (opStep natCMon (opAmend natCMon) s1) (tRet natCMon (St natCMon) s1)
+stepAmend = refl
+
+stepPropose : Eq (T natCMon (St natCMon)) (opStep natCMon (opPropose natCMon) s1) (tRet natCMon (St natCMon) s1)
+stepPropose = refl
+
+stepBalance : Eq (T natCMon (St natCMon)) (opStep natCMon (opBalance natCMon (address 2)) s1) (tRet natCMon (St natCMon) s1)
+stepBalance = refl
+
+stepSettle : Eq (T natCMon (St natCMon)) (opStep natCMon (opSettle natCMon 0) s1) (tNone natCMon (St natCMon))
+stepSettle = refl
+
+-- opStep fits the op type of tSem, so tSem gives the transcript meaning.
+semEscrow : (w : FreeMon (Op natCMon)) → (s : St natCMon) → T natCMon (St natCMon)
+semEscrow w s = tSem natCMon (Op natCMon) (St natCMon) (opStep natCMon) w s
+
+-- A transcript of 2 ops on s0: a deposit, then a vote of address 2 on the
+-- claim 0.
+w2 : FreeMon (Op natCMon)
+w2 = fmCons (Op natCMon) (opDeposit natCMon (address 1) (address 2) receiptEx) (fmCons (Op natCMon) (opVote natCMon (address 2) 0 (voteE decRelease)) (fmNil (Op natCMon)))
+
+s2Ex : St natCMon
+s2Ex = stMk natCMon kappaEx4 0 2 (ledgerAdd natCMon (fmNil (ℕ × ℕ)) (address 1) 40) (fmNil (ℕ × ℕ)) (nmapSet (Claim natCMon) (fmNil (ℕ × Claim natCMon)) 0 (pack (address 1) (pack (address 2) 40))) (fmCons ℕ 5 (fmNil ℕ)) (nmapSet (FreeMon (Option DecE)) (fmNil (ℕ × FreeMon (Option DecE))) 0 (fmCons (Option DecE) none (fmCons (Option DecE) (some decRelease) (fmCons (Option DecE) none (fmCons (Option DecE) none (fmNil (Option DecE))))))) (fmNil (ℕ × Motion))
+
+semW2 : Eq (T natCMon (St natCMon)) (semEscrow w2 s0) (tRet natCMon (St natCMon) s2Ex)
+semW2 = refl
+
+-- A transcript with two deposits of one receipt gives none.
+wTwice : FreeMon (Op natCMon)
+wTwice = fmCons (Op natCMon) (opDeposit natCMon (address 1) (address 2) receiptEx) (fmCons (Op natCMon) (opDeposit natCMon (address 3) (address 4) receiptEx) (fmNil (Op natCMon)))
+
+semTwice : Eq (T natCMon (St natCMon)) (semEscrow wTwice s0) (tNone natCMon (St natCMon))
+semTwice = refl
+
+-- natEqDec gives some on equal values and none on different values.
+eqDec33 : Eq Bool (option false (λ (e : Eq ℕ 3 3) → true) (natEqDec 3 3)) true
+eqDec33 = refl
+
+eqDec34 : Eq Bool (option false (λ (e : Eq ℕ 3 4) → true) (natEqDec 3 4)) false
+eqDec34 = refl
+
+eqDecLen : Eq Bool (option false (λ (e : Eq ℕ (fmLength (Option DecE) (botE kappaEx4)) (kappaN kappaEx4)) → true) (natEqDec (fmLength (Option DecE) (botE kappaEx4)) (kappaN kappaEx4))) true
+eqDecLen = refl
+
+-- Three votes of members 1, 2 and 3 on claim 0 (n = 4, t = 3), then w.
+votes3 : (d : DecE) → (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+votes3 d w = fmCons (Op natCMon) (opVote natCMon (address 1) 0 (voteE d)) (fmCons (Op natCMon) (opVote natCMon (address 2) 0 (voteE d)) (fmCons (Op natCMon) (opVote natCMon (address 3) 0 (voteE d)) w))
+
+settle0 : FreeMon (Op natCMon)
+settle0 = fmCons (Op natCMon) (opSettle natCMon 0) (fmNil (Op natCMon))
+
+-- The vouchers of a result.
+outOf : (t : T natCMon (St natCMon)) → FreeMon (Voucher natCMon)
+outOf t = option (fmNil (Voucher natCMon)) (λ (q : St natCMon × FreeMon (Voucher natCMon)) → payload q) t
+
+-- Release on s1: 30 leaves the ledger of payer 3 and goes to the credit
+-- of payee 2. The claim and its Gamma_E entry close.
+relT : T natCMon (St natCMon)
+relT = semEscrow (votes3 decRelease settle0) s1
+
+relCredit : Eq ℕ (ledgerGet natCMon (stCredit natCMon (exState relT)) (address 2)) 30
+relCredit = refl
+
+relLedger : Eq ℕ (natAdd (ledgerGet natCMon (stLedger natCMon (exState relT)) (address 3)) 30) (ledgerGet natCMon (stLedger natCMon s1) (address 3))
+relLedger = refl
+
+relClaim : Eq Bool (option false (λ (c : Claim natCMon) → true) (nmapGet (Claim natCMon) (stClaims natCMon (exState relT)) 0)) false
+relClaim = refl
+
+relGammaE : Eq Bool (option false (λ (x : FreeMon (Option DecE)) → true) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon (exState relT)) 0)) false
+relGammaE = refl
+
+relPos : Eq ℕ (stPos natCMon (exState relT)) 11
+relPos = refl
+
+-- Refund on s1: 30 goes back to the credit of payer 3.
+refT : T natCMon (St natCMon)
+refT = semEscrow (votes3 decRefund settle0) s1
+
+refCredit : Eq ℕ (ledgerGet natCMon (stCredit natCMon (exState refT)) (address 3)) 30
+refCredit = refl
+
+refPayee : Eq ℕ (ledgerGet natCMon (stCredit natCMon (exState refT)) (address 2)) 0
+refPayee = refl
+
+refLedger : Eq ℕ (natAdd (ledgerGet natCMon (stLedger natCMon (exState refT)) (address 3)) 30) (ledgerGet natCMon (stLedger natCMon s1) (address 3))
+refLedger = refl
+
+-- Hold on s1 (one vote each for Release, Refund and Hold): an entry only,
+-- and the claim stays open.
+holdT : T natCMon (St natCMon)
+holdT = semEscrow (fmCons (Op natCMon) (opVote natCMon (address 1) 0 (voteE decRelease)) (fmCons (Op natCMon) (opVote natCMon (address 2) 0 (voteE decRefund)) (fmCons (Op natCMon) (opVote natCMon (address 3) 0 (voteE decHold)) settle0))) s1
+
+holdOpen : Eq Bool (option false (λ (x : FreeMon (Option DecE)) → true) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon (exState holdT)) 0)) true
+holdOpen = refl
+
+holdLedger : Eq ℕ (ledgerGet natCMon (stLedger natCMon (exState holdT)) (address 3)) (ledgerGet natCMon (stLedger natCMon s1) (address 3))
+holdLedger = refl
+
+holdPos : Eq ℕ (stPos natCMon (exState holdT)) 11
+holdPos = refl
+
+-- Two votes only: X_0 is not ready, so settle stops. An unknown claim
+-- stops settle.
+settleNotReady : Eq (T natCMon (St natCMon)) (semEscrow (fmCons (Op natCMon) (opVote natCMon (address 1) 0 (voteE decRelease)) (fmCons (Op natCMon) (opVote natCMon (address 2) 0 (voteE decRelease)) settle0)) s1) (tNone natCMon (St natCMon))
+settleNotReady = refl
+
+settleNoClaim : Eq (T natCMon (St natCMon)) (runSettle natCMon 9 s1) (tNone natCMon (St natCMon))
+settleNoClaim = refl
+
+-- withdraw 20 of the credit 30 of member 2 after Release: the voucher
+-- (2, 20, 11) at entry index 11. A withdraw above the credit stops.
+wdT : T natCMon (St natCMon)
+wdT = semEscrow (votes3 decRelease (fmCons (Op natCMon) (opSettle natCMon 0) (fmCons (Op natCMon) (opWithdraw natCMon (address 2) 20) (fmNil (Op natCMon))))) s1
+
+wdOut : Eq (FreeMon (Voucher natCMon)) (outOf wdT) (fmCons (Voucher natCMon) (pack (address 2) (pack 20 11)) (fmNil (Voucher natCMon)))
+wdOut = refl
+
+wdCredit : Eq ℕ (ledgerGet natCMon (stCredit natCMon (exState wdT)) (address 2)) 10
+wdCredit = refl
+
+wdPos : Eq ℕ (stPos natCMon (exState wdT)) 12
+wdPos = refl
+
+wdOver : Eq (T natCMon (St natCMon)) (semEscrow (votes3 decRelease (fmCons (Op natCMon) (opSettle natCMon 0) (fmCons (Op natCMon) (opWithdraw natCMon (address 2) 31) (fmNil (Op natCMon))))) s1) (tNone natCMon (St natCMon))
+wdOver = refl
+
+-- motion: member 1 puts kappaEx4 on s1. The motion index is 7 and Y_7 is
+-- bot^M. A non-member or a kappa' that is not well formed stops motion.
+motT : T natCMon (St natCMon)
+motT = runMotion natCMon (address 1) kappaEx4 s1
+
+motPos : Eq ℕ (stPos natCMon (exState motT)) 8
+motPos = refl
+
+motConfig : Eq (Option (FreeMon (Option BallotA))) (option none (λ (j : Motion) → some (motionConfig j)) (nmapGet Motion (stGammaA natCMon (exState motT)) 7)) (some (botA kappaEx4))
+motConfig = refl
+
+motNotMember : Eq (T natCMon (St natCMon)) (runMotion natCMon (address 9) kappaEx4 s1) (tNone natCMon (St natCMon))
+motNotMember = refl
+
+kappaBad : Kappa
+kappaBad = pack members4 (pack 1 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 1 c)))
+
+kappaBadWf : Eq Bool (kappaWellFormed kappaBad) false
+kappaBadWf = refl
+
+motBad : Eq (T natCMon (St natCMon)) (runMotion natCMon (address 1) kappaBad s1) (tNone natCMon (St natCMon))
+motBad = refl
+
+-- A transcript on s0: deposit 40 of payer 1 for payee 2, three Release
+-- votes, settle and withdraw 40. The voucher is (2, 40, 5).
+fullT : T natCMon (St natCMon)
+fullT = semEscrow (fmCons (Op natCMon) (opDeposit natCMon (address 1) (address 2) receiptEx) (votes3 decRelease (fmCons (Op natCMon) (opSettle natCMon 0) (fmCons (Op natCMon) (opWithdraw natCMon (address 2) 40) (fmNil (Op natCMon)))))) s0
+
+fullOut : Eq (FreeMon (Voucher natCMon)) (outOf fullT) (fmCons (Voucher natCMon) (pack (address 2) (pack 40 5)) (fmNil (Voucher natCMon)))
+fullOut = refl
+
+fullLedger : Eq ℕ (ledgerGet natCMon (stLedger natCMon (exState fullT)) (address 1)) 0
+fullLedger = refl
+
+fullCredit : Eq ℕ (ledgerGet natCMon (stCredit natCMon (exState fullT)) (address 2)) 0
+fullCredit = refl
+
+fullPos : Eq ℕ (stPos natCMon (exState fullT)) 6
+fullPos = refl
+
+-- enact (L397 to L403, O-off-2) on s1 (tA = 4). Member 1 puts the motion
+-- kappaEx7 (n = 7, t = 5, tA = 5), which gets the index 7. Members of M
+-- vote on the motion 7, then enact 7 runs.
+members7 : FreeMon Address
+members7 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmCons Address (address 5) (fmCons Address (address 6) (fmCons Address (address 7) (fmNil Address)))))))
+
+kappaEx7 : Kappa
+kappaEx7 = pack members7 (pack 5 (pack 5 (λ (c : Tally 7) → thetaThreshold 7 5 c)))
+
+kappaEx7Wf : Eq Bool (kappaWellFormed kappaEx7) true
+kappaEx7Wf = refl
+
+motion7 : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+motion7 w = fmCons (Op natCMon) (opMotion natCMon (address 1) kappaEx7) w
+
+voteA7 : (m : ℕ) → (b : BallotA) → (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+voteA7 m b w = fmCons (Op natCMon) (opVote natCMon (address m) 7 (voteA b)) w
+
+enact7 : FreeMon (Op natCMon)
+enact7 = fmCons (Op natCMon) (opEnact natCMon 7) (fmNil (Op natCMon))
+
+-- Adopt: 4 Adopt ballots (tA = 4). kappaEx7 is in force, the epoch is 2,
+-- the motion 7 is closed, X_0 and Y_0 are bot^{M'} (n = 7) and pos is 13.
+adoptT : T natCMon (St natCMon)
+adoptT = semEscrow (motion7 (voteA7 1 ballotAdopt (voteA7 2 ballotAdopt (voteA7 3 ballotAdopt (voteA7 4 ballotAdopt enact7))))) s1
+
+adoptMembers : Eq (FreeMon Address) (kappaMembers (stKappa natCMon (exState adoptT))) members7
+adoptMembers = refl
+
+adoptEpoch : Eq ℕ (stEpoch natCMon (exState adoptT)) 2
+adoptEpoch = refl
+
+adoptPos : Eq ℕ (stPos natCMon (exState adoptT)) 13
+adoptPos = refl
+
+adoptClosed : Eq (Option Motion) (nmapGet Motion (stGammaA natCMon (exState adoptT)) 7) none
+adoptClosed = refl
+
+adoptX0 : Eq (Option (FreeMon (Option DecE))) (nmapGet (FreeMon (Option DecE)) (stGammaE natCMon (exState adoptT)) 0) (some (botE kappaEx7))
+adoptX0 = refl
+
+adoptY0 : Eq (Option (FreeMon (Option BallotA))) (option none (λ (j : Motion) → some (motionConfig j)) (nmapGet Motion (stGammaA natCMon (exState adoptT)) 0)) (some (botA kappaEx7))
+adoptY0 = refl
+
+-- Thm 4.5 (law point): the kappa in force after the adopted motion is
+-- well formed.
+adoptWf : Eq Bool (kappaWellFormed (stKappa natCMon (exState adoptT))) true
+adoptWf = refl
+
+-- Thm 4.3 (law point): the escrow part after the transcript is the
+-- escrow part of s1.
+adoptEscrow : Eq (Escrow natCMon) (stEscrow natCMon (exState adoptT)) (stEscrow natCMon s1)
+adoptEscrow = refl
+
+-- The state before enact 7. The transcript is this state, then enact 7.
+-- Thm 4.3 (the general proof enactEscrow) at this state.
+preAdopt : St natCMon
+preAdopt = exState (semEscrow (motion7 (voteA7 1 ballotAdopt (voteA7 2 ballotAdopt (voteA7 3 ballotAdopt (voteA7 4 ballotAdopt (fmNil (Op natCMon))))))) s1)
+
+adoptStep : Eq (T natCMon (St natCMon)) adoptT (runEnact natCMon 7 preAdopt)
+adoptStep = refl
+
+adoptThm43 : Eq (T natCMon (Escrow natCMon)) (escrowOf natCMon (runEnact natCMon 7 preAdopt)) (escrowAs natCMon (runEnact natCMon 7 preAdopt) (stEscrow natCMon preAdopt))
+adoptThm43 = enactEscrow natCMon 7 preAdopt
+
+-- Reject: one Reject ballot (n - tA = 0). The motion 7 is closed, kappa
+-- and the epoch stay, Y_0 stays and pos is 10.
+rejectT : T natCMon (St natCMon)
+rejectT = semEscrow (motion7 (voteA7 2 ballotReject enact7)) s1
+
+rejectClosed : Eq (Option Motion) (nmapGet Motion (stGammaA natCMon (exState rejectT)) 7) none
+rejectClosed = refl
+
+rejectKappa : Eq (FreeMon Address) (kappaMembers (stKappa natCMon (exState rejectT))) members4
+rejectKappa = refl
+
+rejectEpoch : Eq ℕ (stEpoch natCMon (exState rejectT)) 1
+rejectEpoch = refl
+
+rejectPos : Eq ℕ (stPos natCMon (exState rejectT)) 10
+rejectPos = refl
+
+rejectY0 : Eq (Option (FreeMon (Option BallotA))) (option none (λ (j : Motion) → some (motionConfig j)) (nmapGet Motion (stGammaA natCMon (exState rejectT)) 0)) (some (botA kappaEx4))
+rejectY0 = refl
+
+rejectEscrow : Eq (Escrow natCMon) (stEscrow natCMon (exState rejectT)) (stEscrow natCMon s1)
+rejectEscrow = refl
+
+-- Hold: 3 Adopt ballots. The motion 7 stays open with its ballots, kappa
+-- and the epoch stay and pos is 12.
+holdAT : T natCMon (St natCMon)
+holdAT = semEscrow (motion7 (voteA7 1 ballotAdopt (voteA7 2 ballotAdopt (voteA7 3 ballotAdopt enact7)))) s1
+
+holdAOpen : Eq (Option (FreeMon (Option BallotA))) (option none (λ (j : Motion) → some (motionConfig j)) (nmapGet Motion (stGammaA natCMon (exState holdAT)) 7)) (some (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) (some ballotAdopt) (fmCons (Option BallotA) none (fmNil (Option BallotA)))))))
+holdAOpen = refl
+
+holdAKappa : Eq (FreeMon Address) (kappaMembers (stKappa natCMon (exState holdAT))) members4
+holdAKappa = refl
+
+holdAEpoch : Eq ℕ (stEpoch natCMon (exState holdAT)) 1
+holdAEpoch = refl
+
+holdAPos : Eq ℕ (stPos natCMon (exState holdAT)) 12
+holdAPos = refl
+
+holdAEscrow : Eq (Escrow natCMon) (stEscrow natCMon (exState holdAT)) (stEscrow natCMon s1)
+holdAEscrow = refl
+
+-- An unknown motion stops enact. Thm 4.3 (general proof) at the motion 0
+-- of s1, which has no ballots (Hold).
+enactUnknown : Eq (T natCMon (St natCMon)) (opStep natCMon (opEnact natCMon 9) s1) (tNone natCMon (St natCMon))
+enactUnknown = refl
+
+holdThm43 : Eq (T natCMon (Escrow natCMon)) (escrowOf natCMon (runEnact natCMon 0 s1)) (escrowAs natCMon (runEnact natCMon 0 s1) (stEscrow natCMon s1))
+holdThm43 = enactEscrow natCMon 0 s1
+
+-- Invariant I (Thm 4.1), Cor 4.2 and Conservation (Thm 4.4) on one valid
+-- transcript from S_0 (n = 4). Payer 1 makes the claim 0 (40 to payee 2)
+-- and the claim 1 (25 to payee 3). Payer 3 makes the claim 2 (10 to payee
+-- 4). Then Release of claim 0, Refund of claim 1, Hold of claim 2, a
+-- withdraw of 20 by member 2 and an Adopt of kappaEx7 (motion 16) occur.
+-- iT1 to iT6 are the results after each part. These are law points, not
+-- a general proof (D68).
+receiptB : Receipt natCMon
+receiptB = receipt natCMon 6 25
+
+receiptC : Receipt natCMon
+receiptC = receipt natCMon 7 10
+
+-- The values of the receipts of the examples, by key.
+nuTable : FreeMon (ℕ × ℕ)
+nuTable = nmapSet ℕ (nmapSet ℕ (nmapSet ℕ (fmNil (ℕ × ℕ)) 5 40) 6 25) 7 10
+
+-- The sum of nu over the spent receipts.
+spentSum : (sp : FreeMon ℕ) → ℕ
+spentSum sp = fold 0 (λ (k : ℕ) (acc : ℕ) → natAdd (option 0 (λ (x : ℕ) → x) (nmapGet ℕ nuTable k)) acc) sp
+
+depOp : (p : ℕ) → (q : ℕ) → (r : Receipt natCMon) → (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+depOp p q r w = fmCons (Op natCMon) (opDeposit natCMon (address p) (address q) r) w
+
+votes3At : (c : ℕ) → (d : DecE) → (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+votes3At c d w = fmCons (Op natCMon) (opVote natCMon (address 1) c (voteE d)) (fmCons (Op natCMon) (opVote natCMon (address 2) c (voteE d)) (fmCons (Op natCMon) (opVote natCMon (address 3) c (voteE d)) w))
+
+-- A Release, a Refund and a Hold ballot: the verdict is Hold.
+holdVotes : (c : ℕ) → (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+holdVotes c w = fmCons (Op natCMon) (opVote natCMon (address 1) c (voteE decRelease)) (fmCons (Op natCMon) (opVote natCMon (address 2) c (voteE decRefund)) (fmCons (Op natCMon) (opVote natCMon (address 3) c (voteE decHold)) w))
+
+settleAt : (c : ℕ) → (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+settleAt c w = fmCons (Op natCMon) (opSettle natCMon c) w
+
+iDep : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+iDep w = depOp 1 2 receiptEx (depOp 1 3 receiptB (depOp 3 4 receiptC w))
+
+iRel : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+iRel w = votes3At 0 decRelease (settleAt 0 w)
+
+iRef : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+iRef w = votes3At 1 decRefund (settleAt 1 w)
+
+iHold : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+iHold w = holdVotes 2 (settleAt 2 w)
+
+iWd : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+iWd w = fmCons (Op natCMon) (opWithdraw natCMon (address 2) 20) w
+
+-- Member 1 puts kappaEx7 at the entry index 16, members 1 to 4 vote
+-- Adopt (tA = 4) and enact 16 runs.
+iAdopt : (w : FreeMon (Op natCMon)) → FreeMon (Op natCMon)
+iAdopt w = fmCons (Op natCMon) (opMotion natCMon (address 1) kappaEx7) (fmCons (Op natCMon) (opVote natCMon (address 1) 16 (voteA ballotAdopt)) (fmCons (Op natCMon) (opVote natCMon (address 2) 16 (voteA ballotAdopt)) (fmCons (Op natCMon) (opVote natCMon (address 3) 16 (voteA ballotAdopt)) (fmCons (Op natCMon) (opVote natCMon (address 4) 16 (voteA ballotAdopt)) (fmCons (Op natCMon) (opEnact natCMon 16) w)))))
+
+iT1 : T natCMon (St natCMon)
+iT1 = semEscrow (iDep (fmNil (Op natCMon))) s0
+
+iT2 : T natCMon (St natCMon)
+iT2 = semEscrow (iDep (iRel (fmNil (Op natCMon)))) s0
+
+iT3 : T natCMon (St natCMon)
+iT3 = semEscrow (iDep (iRel (iRef (fmNil (Op natCMon))))) s0
+
+iT4 : T natCMon (St natCMon)
+iT4 = semEscrow (iDep (iRel (iRef (iHold (fmNil (Op natCMon)))))) s0
+
+iT5 : T natCMon (St natCMon)
+iT5 = semEscrow (iDep (iRel (iRef (iHold (iWd (fmNil (Op natCMon))))))) s0
+
+iT6 : T natCMon (St natCMon)
+iT6 = semEscrow (iDep (iRel (iRef (iHold (iWd (iAdopt (fmNil (Op natCMon)))))))) s0
+
+-- Invariant I at the address key k of s: the ledger value is the sum of
+-- the open claims of that payer.
+invIAt : (s : St natCMon) → (k : ℕ) → Bool
+invIAt s k = natEq (ledgerGet natCMon (stLedger natCMon s) (address k)) (sumClaims natCMon (stClaims natCMon s) (address k))
+
+-- Invariant I at each key of the ledger and at each payer of an open
+-- claim. At an address in neither, both sides are 0.
+invIState : (s : St natCMon) → Bool
+invIState s = fold (fold true (λ (h : ℕ × Claim natCMon) (acc : Bool) → flagIf (invIAt s (addressKey (claimPayer natCMon (payload h)))) acc false) (stClaims natCMon s)) (λ (h : ℕ × cmCarrier natCMon) (acc : Bool) → flagIf (invIAt s (witness h)) acc false) (stLedger natCMon s)
+
+-- The result none gives false: each law point below also says that the
+-- transcript is valid.
+invIOf : (t : T natCMon (St natCMon)) → Bool
+invIOf t = option false (λ (q : St natCMon × FreeMon (Voucher natCMon)) → invIState (witness q)) t
+
+-- Cor 4.2: n <= ledger(p) for each open claim (p, q, n).
+corOf : (t : T natCMon (St natCMon)) → Bool
+corOf t = option false (λ (q : St natCMon × FreeMon (Voucher natCMon)) → fold true (λ (h : ℕ × Claim natCMon) (acc : Bool) → flagIf (natLe (claimAmount natCMon (payload h)) (ledgerGet natCMon (stLedger natCMon (witness q)) (claimPayer natCMon (payload h)))) acc false) (stClaims natCMon (witness q))) t
+
+-- Conservation: the sum over the spent receipts is the sum of the ledger,
+-- the credit and the vouchers of the output.
+consOf : (t : T natCMon (St natCMon)) → Bool
+consOf t = option false (λ (q : St natCMon × FreeMon (Voucher natCMon)) → natEq (spentSum (stSpent natCMon (witness q))) (natAdd (ledgerSum natCMon (stLedger natCMon (witness q))) (natAdd (ledgerSum natCMon (stCredit natCMon (witness q))) (voucherSum natCMon (payload q))))) t
+
+iInv1 : Eq Bool (invIOf iT1) true
+iInv1 = refl
+
+iInv2 : Eq Bool (invIOf iT2) true
+iInv2 = refl
+
+iInv3 : Eq Bool (invIOf iT3) true
+iInv3 = refl
+
+iInv4 : Eq Bool (invIOf iT4) true
+iInv4 = refl
+
+iInv5 : Eq Bool (invIOf iT5) true
+iInv5 = refl
+
+iInv6 : Eq Bool (invIOf iT6) true
+iInv6 = refl
+
+iCor1 : Eq Bool (corOf iT1) true
+iCor1 = refl
+
+iCor2 : Eq Bool (corOf iT2) true
+iCor2 = refl
+
+iCor3 : Eq Bool (corOf iT3) true
+iCor3 = refl
+
+iCor4 : Eq Bool (corOf iT4) true
+iCor4 = refl
+
+iCor5 : Eq Bool (corOf iT5) true
+iCor5 = refl
+
+iCor6 : Eq Bool (corOf iT6) true
+iCor6 = refl
+
+iCons1 : Eq Bool (consOf iT1) true
+iCons1 = refl
+
+iCons2 : Eq Bool (consOf iT2) true
+iCons2 = refl
+
+iCons3 : Eq Bool (consOf iT3) true
+iCons3 = refl
+
+iCons4 : Eq Bool (consOf iT4) true
+iCons4 = refl
+
+iCons5 : Eq Bool (consOf iT5) true
+iCons5 = refl
+
+iCons6 : Eq Bool (consOf iT6) true
+iCons6 = refl
+
+-- The two claims of payer 1: 40 + 25 on both sides of Invariant I.
+iT1Ledger : Eq ℕ (ledgerGet natCMon (stLedger natCMon (exState iT1)) (address 1)) 65
+iT1Ledger = refl
+
+iT1Claims : Eq ℕ (sumClaims natCMon (stClaims natCMon (exState iT1)) (address 1)) 65
+iT1Claims = refl
+
+-- After the withdraw: 75 spent = 10 ledger + 45 credit + 20 output.
+iT5Spent : Eq ℕ (spentSum (stSpent natCMon (exState iT5))) 75
+iT5Spent = refl
+
+iT5Out : Eq ℕ (voucherSum natCMon (outOf iT5)) 20
+iT5Out = refl
+
+iT6N : Eq ℕ (kappaN (stKappa natCMon (exState iT6))) 7
+iT6N = refl
+
+-- s1 is not reachable: the ledger of address 1 is 10 with no open claim.
+s1NotI : Eq Bool (invIState s1) false
+s1NotI = refl
+
+-- Prop 3.3: balance writes nothing, and deposit does not write the credit
+-- that balance reads, so the two orders have the same meaning. Two
+-- deposits both read and write pos (the claim index), thus they are not
+-- independent in this version (D69). Their writes to the ledger and to
+-- the spent set commute.
+p33BalDep : Eq (T natCMon (St natCMon)) (semEscrow (fmCons (Op natCMon) (opBalance natCMon (address 2)) (depOp 1 2 receiptEx (fmNil (Op natCMon)))) s0) (semEscrow (depOp 1 2 receiptEx (fmCons (Op natCMon) (opBalance natCMon (address 2)) (fmNil (Op natCMon)))) s0)
+p33BalDep = refl
+
+p33Ledger : Eq (FreeMon (ℕ × ℕ)) (stLedger natCMon (exState (semEscrow (depOp 1 2 receiptEx (depOp 3 4 receiptC (fmNil (Op natCMon)))) s0))) (stLedger natCMon (exState (semEscrow (depOp 3 4 receiptC (depOp 1 2 receiptEx (fmNil (Op natCMon)))) s0)))
+p33Ledger = refl
+
+p33Spent : Eq (FreeMon ℕ) (stSpent natCMon (exState (semEscrow (depOp 1 2 receiptEx (depOp 3 4 receiptC (fmNil (Op natCMon)))) s0))) (stSpent natCMon (exState (semEscrow (depOp 3 4 receiptC (depOp 1 2 receiptEx (fmNil (Op natCMon)))) s0)))
+p33Spent = refl
+
+-- Prop 3.4 (W1): any two quorums (coalitions of at least t members) share
+-- more than f(n) members, for n = 4 (t = 3) and n = 7 (t = 5). At t = 2 on
+-- n = 4, W1 fails and two quorums can share no member (D70). subsets gives
+-- each subset of the members one time.
+subsets : (xs : FreeMon Address) → FreeMon (FreeMon Address)
+subsets xs = fold (fmCons (FreeMon Address) (fmNil Address) (fmNil (FreeMon Address))) (λ (h : Address) (acc : FreeMon (FreeMon Address)) → fold (fmNil (FreeMon Address)) (λ (s : FreeMon Address) (r : FreeMon (FreeMon Address)) → fmCons (FreeMon Address) s (fmCons (FreeMon Address) (fmCons Address h s) r)) acc) xs
+
+quorums : (xs : FreeMon Address) → (t : ℕ) → FreeMon (FreeMon Address)
+quorums xs t = fold (fmNil (FreeMon Address)) (λ (s : FreeMon Address) (r : FreeMon (FreeMon Address)) → flagIf (natLe t (fmLength Address s)) (fmCons (FreeMon Address) s r) r) (subsets xs)
+
+memberOf : (xs : FreeMon Address) → (m : Address) → Bool
+memberOf xs m = fold false (λ (h : Address) (acc : Bool) → flagIf (natEq (addressKey h) (addressKey m)) true acc) xs
+
+meetSize : (a : FreeMon Address) → (b : FreeMon Address) → ℕ
+meetSize a b = fold 0 (λ (h : Address) (acc : ℕ) → flagIf (memberOf b h) (natAdd acc 1) acc) a
+
+quorumsMeet : (k : Kappa) → Bool
+quorumsMeet k = fold true (λ (a : FreeMon Address) (acc : Bool) → fold acc (λ (b : FreeMon Address) (acc2 : Bool) → flagIf (natLt (faultBound (kappaN k)) (meetSize a b)) acc2 false) (quorums (kappaMembers k) (kappaT k))) (quorums (kappaMembers k) (kappaT k))
+
+kappaT2 : Kappa
+kappaT2 = pack members4 (pack 2 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 2 c)))
+
+kappaT2W1 : Eq Bool (kappaW1 kappaT2) false
+kappaT2W1 = refl
+
+q4Count : Eq ℕ (fmLength (FreeMon Address) (quorums members4 3)) 5
+q4Count = refl
+
+q7Count : Eq ℕ (fmLength (FreeMon Address) (quorums members7 5)) 29
+q7Count = refl
+
+p34Ex4 : Eq Bool (quorumsMeet kappaEx4) true
+p34Ex4 = refl
+
+p34Ex7 : Eq Bool (quorumsMeet kappaEx7) true
+p34Ex7 = refl
+
+p34T2 : Eq Bool (quorumsMeet kappaT2) false
+p34T2 = refl

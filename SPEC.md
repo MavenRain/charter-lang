@@ -222,9 +222,10 @@ the host form of each former.
 
 ## 5. Core types
 
-> Write here (DOMAIN SLOT): only the types of `design/DESIGN.md`. Give each
-> type its meaning in the design and its definition in host forms. Mark each
-> definition that a probe fact forces with "probe-forced".
+Each row is a type of `design/DESIGN.md`: its meaning in the design and its
+definition in host forms. "Probe-forced" marks a definition that a probe
+fact forces. S2b gives the rows `Tally n` to `T M Z`. S2c gives the escrow
+state, the rows `Receipt M` to `Op M`.
 
 | Type | Meaning (design section) | Definition |
 |---|---|---|
@@ -233,11 +234,20 @@ the host form of each former.
 | `Kappa` | the constitution `kappa = (M, t, tA, theta)` (Def 2.1, L234) | `(members : FreeMon Address) × (thr : ℕ) × (thrA : ℕ) × ((c : Tally (fmLength Address members)) → DecE)`. `n` is the length of `members`. The decidable check of `K_wf` is `kappaWellFormed` (Q1). |
 | `KappaWf` | `K_wf`, the well-formed constitutions (L240 to L243; Q1 (a)) | `(k : Kappa) × Eq Bool (kappaWellFormed k) true`. `kappaWellFormed k` holds if the keys of `members` ascend and W1 and W2 hold. W3 holds by the type of `theta`. |
 | `T M Z` | the partial writer `T Z = 1 + Z x List Voucher` (L285, L286; Q5) | `Option (Z × FreeMon (Voucher M))`. `none` is a stop. `some (z, o)` is a result `z` with the output `o`. Probe-forced: conv has no `Option` eta, thus the one CM form of Q5 has no proof of the right unit (Q-S2b-2). |
+| `Receipt M` | a receipt `iota` of the rail: an opaque key and its value `nu(iota)` (L334) | `data Receipt (M : CMon)` with one constructor of a key `ℕ` and a value `cmCarrier M`; `receiptId` and `receiptNu` read them |
+| `Ledger M` | a map `Address → A` for ledger and credit. An address that is not in the map has the value 0 of `A` | `FreeMon (ℕ × cmCarrier M)` keyed by `addressKey`. The keys ascend strictly, thus two maps with the same entries are the same list (`nmapGet`, `nmapSet`, `nmapDel`) |
+| `Motion` | an open motion of `Gamma_A`: the proposed `kappa'` and the configuration `Y_j` of the amendment ballots (L390) | `Kappa × FreeMon (Option BallotA)` |
+| `Vote` | the ballot `b` of `vote u b` (L358): an escrow verdict on the claim `u`, or an amendment ballot on the motion `u` | `data Vote` with `voteE : DecE → Vote` and `voteA : BallotA → Vote` |
+| `St M` | the state `s`: `kappa`, the epoch, the position `pos` of the next entry, ledger, credit, the open claims, the spent receipt keys, `Gamma_E` and `Gamma_A`. `L = L_kappa` is not a field: the clear meaning computes it from `kappa` (Q7 (a)) | `Kappa × ℕ × ℕ × Ledger M × Ledger M × FreeMon (ℕ × Claim M) × FreeMon ℕ × FreeMon (ℕ × FreeMon (Option DecE)) × FreeMon (ℕ × Motion)`, made by `stMk` and read by `stKappa` to `stGammaA`. A settled claim and a closed motion leave their maps |
+| `Escrow M` | the escrow part `pi_E s` (L405): ledger, credit, claims and spent | `Ledger M × Ledger M × FreeMon (ℕ × Claim M) × FreeMon ℕ`. `stEscrow` gives `pi_E s` |
+| `Op M` | one transcript entry: one constructor for each operation of `docs/PLAN.md` 3.2 | `data Op (M : CMon)` with `opDeposit`, `opCast`, `opVote`, `opSettle`, `opWithdraw`, `opBalance`, `opMotion`, `opEnact`, `opAmend` and `opPropose`. The requester is a field. `opAmend` and `opPropose` have no field |
 
 ## 6. Core operations
 
-> Write here (DOMAIN SLOT): only the operations of `design/DESIGN.md`. Give
-> each operation its type and its meaning in the design.
+Each row is an operation of `design/DESIGN.md`: its type and its meaning in
+the design. The S2c operations (`stInit` to `voucherSum`) take `(M : CMon)`
+first, and the Type column starts after it. A result `none` of
+`T M (St M)` is a stop.
 
 | Operation | Type | Meaning (design section) |
 |---|---|---|
@@ -252,6 +262,19 @@ the host form of each former.
 | `tRet`, `tNone`, `tEmit` | `Z → T M Z`, `T M Z`, `Voucher M → T M Z → T M Z`, each after `(M : CMon)` and `(Z : Type 0)` | `eta`, the stop, and `emit` with `emit v none = none` (L285, L286) |
 | `tBind`, `tKleisli` | `T M Y → (Y → T M Z) → T M Z`, `(X → T M Y) → (Y → T M Z) → X → T M Z`, each after `(M : CMon)` and the type arguments | bind and the Kleisli composition `>=>` of `T` (L286 to L289) |
 | `tSem` | `(M : CMon) → (X : Type 0) → (S : Type 0) → (X → S → T M S) → FreeMon X → S → T M S` | the transcript fold `sem` (L287): `sem eps = eta` and `sem (x :: w) = op x >=> sem w`. `tSemNil` and `tSemAppend` state Thm 3.1. |
+| `stInit` | `Kappa → St M` | the start state `S_0` of `kappa`: epoch 0, position 0 and empty maps |
+| `runDeposit` | `Address → Address → Receipt M → St M → T M (St M)` | deposit `p q iota` (L334, L347 to L349). A spent receipt stops. If not, the ledger of `p` gets `nu(iota)`, the claim `(p, q, nu(iota))` gets the index `pos` and the configuration `bot^M`, the key of `iota` is spent, and `pos` becomes `pos + 1` |
+| `runCast` | `FreeMon (Option DecE) → St M → T M (St M)` | cast `X` (L353, L354): always defined, independent of open claims, with no entry or state change. `kappaF` supplies the clear verdict `theta(tau(X))` separately |
+| `runVote` | `Address → ℕ → Vote → St M → T M (St M)` | vote `m u b` (L358, L541, L542): the member `m` puts `b` at its position in the configuration of `u`, and `pos` becomes `pos + 1`. A second vote of `m` replaces the first. A requester that is not in `M`, or an unknown `u`, stops |
+| `runSettle` | `ℕ → St M → T M (St M)` | settle `c` (L547 to L555) with the current `kappa` (O-off-1). Release and Refund take `n` from the ledger of the payer `p`, add `n` to the credit of `r` (the payee `q` for Release, `p` for Refund) and close `c`. Hold makes an entry only. A claim that is not ready stops |
+| `runWithdraw` | `Address → cmCarrier M → St M → T M (St M)` | withdraw `a n` (L380, L381, L559 to L563): `n` leaves the credit of `a`, and the voucher `(a, n, i)` goes to the output at the entry index `i` |
+| `runBalance` | `Address → St M → T M (St M)` | balance `a` (L567). It makes no entry |
+| `runMotion` | `Address → Kappa → St M → T M (St M)` | motion `m kappa'` (L390, L571, L572): `m` is a member and `kappa'` is in `K_wf`, else it stops. The motion index is the entry index, and `Y_j` is `bot^M` |
+| `runEnact` | `ℕ → St M → T M (St M)` | enact `j` (L397 to L403) on `Amd_tA(Y_j)` of the current `kappa`. Adopt installs `kappa'`, the epoch becomes `e + 1`, and `clear_{M'}` sets each open configuration to `bot^{M'}` (O-off-2). Reject closes `j`. Hold keeps the state. Each verdict makes an entry. An unknown motion stops |
+| `runAmend`, `runPropose` | `St M → T M (St M)` | amend (L411, L412) and propose `p ; q` (L415 to L417): the identity. propose is vacuous over the discrete `Obj_M` |
+| `opStep` | `Op M → St M → T M (St M)` | the meaning of one entry. `tSem M (Op M) (St M) (opStep M)` is the meaning of a transcript (Thm 3.1) |
+| `enactEscrow` | `(j : ℕ) → (s : St M) → Eq (T M (Escrow M)) (escrowOf M (runEnact M j s)) (escrowAs M (runEnact M j s) (stEscrow M s))` | Thm 4.3 (L405): enact does not change `pi_E s`. A general proof: ind on `DecA`, then on `Option` |
+| `sumClaims`, `ledgerSum`, `voucherSum` | `FreeMon (ℕ × Claim M) → Address → cmCarrier M`, `Ledger M → cmCarrier M`, `FreeMon (Voucher M) → cmCarrier M` | the sums of Invariant I (the open claims of the payer `p`, Thm 4.1) and of Conservation (Thm 4.4) |
 
 ## 7. Target and instance encoding
 
