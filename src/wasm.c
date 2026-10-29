@@ -8,6 +8,10 @@
    - Function 1 + K is IR entry K, exported as its name. Each parameter and the
      result is an i64. Each entry first resets the heap pointer to 0, and it
      traps on a Bool argument larger than 1.
+   - A stream entry (IrFunc.stream, Q-S3-7) has one parameter: the count n of
+     the input words at address 0. Its heap starts at 8n, and its result is
+     the address of the block [m, the m output words]. A module with a stream
+     entry also exports memory 0 as `memory`.
    - A word is 8 bytes. Word K of the block at address A is at A + 8K.
 
    Each entry has three i64 scratch locals after the IR locals: S and S + 1
@@ -305,12 +309,26 @@ static int bool_guard(Sink *s, const IrFunc *fn, size_t k) {
           put_byte(s, TYPE_EMPTY) && put_byte(s, OP_UNREACHABLE) && put_byte(s, OP_END));
 }
 
+/* Validate n before scaling it: the input must fit in the current memory.
+   This also prevents a count at least 2^61 from wrapping the heap start. */
+static int stream_guard(Sink *s, const IrFunc *fn) {
+  return !fn->stream ||
+    (op2(s, OP_LOCAL_GET, 0) && op2(s, OP_MEMORY_SIZE, 0) && put_byte(s, OP_I64_EXTEND_I32_U) &&
+     i64_const(s, 13) && put_byte(s, OP_I64_SHL) && put_byte(s, OP_I64_GT_U) &&
+     put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) && put_byte(s, OP_UNREACHABLE) && put_byte(s, OP_END));
+}
+
+/* The heap start: 0, or 8n after the n input words of a stream entry. */
+static int heap_start(Sink *s, const IrFunc *fn) {
+  return fn->stream ? op2(s, OP_LOCAL_GET, 0) && i64_const(s, 3) && put_byte(s, OP_I64_SHL) : i64_const(s, 0);
+}
+
 static int part_entry(Sink *s, const void *arg) {
   const IrFunc *fn = arg;
   uint32_t t = fn->local_count;
   size_t k;
   int ok = put_uleb(s, 1) && put_uleb(s, (uint64_t)(fn->local_count - fn->param_count) + 3u) &&
-           put_byte(s, TYPE_I64) && i64_const(s, 0) && op2(s, OP_GLOBAL_SET, 0);
+           put_byte(s, TYPE_I64) && stream_guard(s, fn) && heap_start(s, fn) && op2(s, OP_GLOBAL_SET, 0);
   for (k = 0; k < fn->param_count && ok; k++) ok = bool_guard(s, fn, k);
   return ok && emit_block(s, &fn->body, t, 0) && put_byte(s, OP_UNREACHABLE) && put_byte(s, OP_END);
 }
@@ -350,11 +368,14 @@ static int part_global(Sink *s, const void *arg) {
 static int part_exports(Sink *s, const void *arg) {
   const IrProgram *prog = arg;
   size_t i;
-  int ok = put_uleb(s, prog->func_count);
+  int stream = 0;
+  int ok;
+  for (i = 0; i < prog->func_count; i++) stream = stream || prog->funcs[i].stream;
+  ok = put_uleb(s, prog->func_count + (size_t)stream);
   for (i = 0; i < prog->func_count && ok; i++) {
     ok = put_name(s, prog->funcs[i].name) && put_byte(s, 0) && put_uleb(s, 1u + i);
   }
-  return ok;
+  return ok && (!stream || (put_name(s, "memory") && put_byte(s, 2) && put_uleb(s, 0)));
 }
 
 static int part_code(Sink *s, const void *arg) {
@@ -376,8 +397,16 @@ int target_write(const IrProgram *prog, TargetPart part, FILE *out, FILE *err) {
   static const unsigned char header[8] = {0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00};
   Sink s = {out, 0, err};
   size_t i;
+  int stream = 0;
   int ok = 1;
   (void)part;
+  for (i = 0; i < prog->func_count; i++) stream = stream || prog->funcs[i].stream;
+  for (i = 0; stream && i < prog->func_count; i++) {
+    if (strcmp(prog->funcs[i].name, "memory") == 0) {
+      fputs("langc: REFUSE_EXPORT: memory: the name is reserved for the memory of a stream module\n", err);
+      return 0;
+    }
+  }
   for (i = 0; i < sizeof header && ok; i++) ok = put_byte(&s, header[i]);
   ok = ok && section(&s, SECTION_TYPE, part_types, prog) && section(&s, SECTION_FUNCTION, part_functions, prog) &&
        section(&s, SECTION_MEMORY, part_memory, NULL) && section(&s, SECTION_GLOBAL, part_global, NULL) &&

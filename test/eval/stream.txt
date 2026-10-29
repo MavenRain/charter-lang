@@ -1,0 +1,41 @@
+examples/node.lang natSuccL 2 3
+examples/node.lang natAssoc 1 2 3
+examples/node.lang natUnitL 4
+examples/node.lang natUnitR 4
+examples/node.lang natComm 2 5
+examples/node.lang natMonus 5 3
+examples/node.lang natMonus 3 5
+examples/node.lang natSubAdd 3 4
+examples/node.lang nodeInit 1 0 1 1 0 2 0 2 1 0 2
+examples/node.lang nodeStep 0 0 1 0 2 0 5 40 1 0 1 1 0 2 0 2 1 0 2 0 0 0 0 0 0 0 0
+examples/node.lang nodeStep 0 0 1 0 2 0 5 40 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/node.lang nodeStep 4 0 2 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/node.lang nodeStep 4 0 2 40 1 0 1 1 0 2 0 2 1 0 2 0 0 0 0 0 0 0 0
+examples/node.lang nodeStep 10 1 0 1 1 0 2 0 2 1 0 2 0 0 0 0 0 0 0 0
+examples/node.lang nodeFold 1 0 0 1 0 2 0 5 40 1 1 1 1 0 0 1 5 0 2 1 4 0 2 0 0 1 0 1 1 0 2 0 2 1 0 2 0 0 0 0 0 0 0 0
+examples/node.lang nodeFold 1 4 0 2 0 1 5 0 2 1 1 1 1 0 0 1 0 0 1 0 2 0 5 40 0 1 0 1 1 0 2 0 2 1 0 2 0 0 0 0 0 0 0 0
+examples/node.lang nodeFold 0 1 0 1 1 0 2 0 2 1 0 2 0 2 1 1 40 0 1 2 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/node.lang nodeKappa
+examples/node.lang nodeOps
+examples/client.lang natSuccL 0 0
+examples/client.lang natAssoc 3 0 1
+examples/client.lang natUnitL 0
+examples/client.lang natUnitR 7
+examples/client.lang natComm 4 4
+examples/client.lang natMonus 4 4
+examples/client.lang natSubAdd 0 6
+examples/client.lang clientDeposit 0 1 0 2 0 5 40 1 0 1 1 0 2 0 2 1 0 2 0 0 0 0 0 0 0 0
+examples/client.lang clientDeposit 0 1 0 2 0 5 40 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientCast 1 1 0 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientVote 0 1 0 0 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientVote 0 1 0 2 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientSettle 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientWithdraw 0 2 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientBalance 0 2 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientMotion 0 1 1 0 1 1 0 2 1 0 3 0 2 2 0 2 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientEnact 0 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientAmend 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientPropose 1 0 1 1 0 2 0 2 1 0 2 0 1 1 1 40 0 0 1 0 0 1 0 2 40 0 1 5 0 1 0 1 0 1 0 0 0 0
+examples/client.lang clientVerdict 1 0 1 1 0 2 0 2 1 0 2 1 1 0 1 1 0 0
+examples/client.lang clientVerdict 1 0 1 1 0 2 0 2 1 0 2 1 1 1 1 1 2 0
+examples/client.lang clientVerdict 1 0 1 1 0 2 0 2 1 0 2 1 1 0 0

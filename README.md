@@ -7,9 +7,9 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S2d)
+## Status (S3)
 
-S1, S2a, S2b, S2c and S2d are built. The front end has the leaf-lang surface. `langc fmt`
+S1, S2a, S2b, S2c, S2d and S3 are built. The front end has the leaf-lang surface. `langc fmt`
 prints the one canonical form, and `langc check --json` gives a JSON
 diagnostic with a fix hint and the counts parsed, typed and laws (the law
 definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
@@ -51,12 +51,23 @@ of S8. The open items O-off-1 to O-off-8 are ruled (`docs/PLAN.md` section
 parts are not built. `make check` passes. `docs/PLAN.md` section 9 gives
 the slices.
 
+S3 adds the Wasm for the clear meaning. `Kappa` holds theta as the data
+type `Rule` (Q-S3-1). `langc build` lowers each run-path `ind` as its
+paramorphism (Q-S3-5). Each domain type with a stream form has a codec in
+the IR: a word stream in prefix order (`SPEC.md` section 7). With the flag
+`--words`, `langc ir`, `abi` and `build` make each program def with a
+stream form a stream entry, and `langc eval --words` prints the same
+words. `examples/node.lang` has the node entry points (`nodeInit`,
+`nodeStep`, `nodeFold`), and `examples/client.lang` has the client entry
+points (the 10 run functions at `natCMon` and `clientVerdict`). The gate
+compares `langc eval --words` and Wasm on 41 entry stream rows.
+
 ## When to reach for charter-lang
 
 | Task | charter-lang? |
 |---|---|
-| state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes, PLANNED (S2b) |
-| run the clear meaning of a transcript in Wasm | yes, PLANNED (S3) |
+| state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes (S2b to S2d) |
+| run the clear meaning of a transcript in Wasm | yes (S3) |
 | tally encrypted ballots and update encrypted credits under threshold TFHE | yes, PLANNED (S5, S6) |
 | prove membership and ballot well-formedness in a circuit | yes, PLANNED (S7) |
 | verify a transcript as a member node or as a public verifier | yes, PLANNED (S8) |
@@ -77,7 +88,7 @@ the slices.
 ## Build
 
 `make check` builds `build/langc` with tcc and runs the gate. The gate
-needs node, wasm-validate and wasm-objdump.
+needs node, wasm-validate, wasm-objdump and wasm-interp.
 
 ## License
 

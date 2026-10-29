@@ -153,11 +153,8 @@ for want in "double 3:6" "bump 2:6"; do
   [ "$got" = "${want#*:}" ] || { echo "FAIL ind.lang $call: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done
 status=0
-first=$(build/langc ir test/ir/ind.lang 2>&1 > /dev/null) || status=$?
-case "$status:$first" in
-  "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
-  *) echo "FAIL ind.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
-esac
+build/langc ir test/ir/ind.lang >/dev/null 2>"$tmp/ir.err" || status=$?
+[ "$status" -eq 0 ] || { echo "FAIL ind.lang: ir exit $status: $(head -n 1 "$tmp/ir.err")"; fail=$((fail + 1)); }
 status=0
 build/langc check test/ir/optind.lang > /dev/null || status=$?
 [ "$status" -eq 0 ] || { echo "FAIL optind.lang: check exit $status"; fail=$((fail + 1)); }
@@ -167,11 +164,13 @@ for want in "someGet 4:5" "noneGet 3:3" "pickGet 1:2" "pickGet 5:0"; do
   [ "$got" = "${want#*:}" ] || { echo "FAIL optind.lang $call: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done
 status=0
-first=$(build/langc ir test/ir/optind.lang 2>&1 > /dev/null) || status=$?
-case "$status:$first" in
-  "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
-  *) echo "FAIL optind.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
-esac
+build/langc ir test/ir/optind.lang >/dev/null 2>"$tmp/ir.err" || status=$?
+[ "$status" -eq 0 ] || { echo "FAIL optind.lang: ir exit $status: $(head -n 1 "$tmp/ir.err")"; fail=$((fail + 1)); }
+# Each ind on a run-time value lowers as its paramorphism (test/ir/para.lang).
+status=0
+build/langc ir test/ir/para.lang >"$tmp/para.ir" 2>&1 || status=$?
+[ "$status" -eq 0 ] && rg -q '^ +repeat ' "$tmp/para.ir" ||
+  { echo "FAIL para.lang: want ir exit 0 and a repeat, got exit $status: $(head -n 1 "$tmp/para.ir")"; fail=$((fail + 1)); }
 
 # The Wasm target: each module builds and is valid. Then the differential: on
 # the grid of test/grid.awk, node and `langc eval` give the same result for
@@ -179,7 +178,7 @@ esac
 wasms=0
 cases=0
 mismatches=0
-for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap.lang test/ir/nat-effects.lang; do
+for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap.lang test/ir/nat-effects.lang test/ir/ind.lang test/ir/optind.lang test/ir/para.lang; do
   w="$tmp/$(basename "$f" .lang).wasm"
   wasms=$((wasms + 1))
   if ! build/langc build "$f" -o "$w" 2>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
@@ -333,6 +332,93 @@ for f in $(printf '%s\n' test/json/*.lang | rg '^test/json/[A-Z_]+\.lang$'); do
   rg -q -x -F "$(basename "$f" .lang)" "$tmp/doc-codes.txt" || { echo "FAIL $f: the code is not in docs/DIAGNOSTICS.md"; fail=$((fail + 1)); }
 done
 echo "json: $jsons fixtures; diagnostics: $codes codes, $fixtures with a fixture, $reasons with no fixture"
+
+# Each line of test/eval/words.txt is `NAME [WORDS] => OUTPUT`. `langc eval
+# --words test/eval/words.lang NAME WORDS` must exit 0 and print OUTPUT. The
+# OUTPUT `trap CODE` is the line `trap` and `langc: CODE: NAME: ...` on stderr
+# (Q-S3-8).
+wordrows=0
+while IFS= read -r line; do
+  wantline=${line#* => }
+  want=$wantline
+  set -- ${line%% => *}
+  name=$1
+  shift
+  status=0
+  got=$(build/langc eval --words test/eval/words.lang "$name" "$@" 2>"$tmp/err") || status=$?
+  first=$(head -n 1 "$tmp/err")
+  want_err=""
+  case "$wantline" in
+    "trap "*) want=trap; want_err="langc: ${wantline#trap }: $name: " ;;
+  esac
+  wordrows=$((wordrows + 1))
+  case "$status|$got|$first" in
+    "0|$want|$want_err"*) ;;
+    *) echo "FAIL eval --words $name: want $wantline, got exit $status: $got $first"; fail=$((fail + 1)) ;;
+  esac
+done <test/eval/words.txt
+echo "words: $wordrows checked"
+
+# words_refused STATUS CODE NAME [WORDS]: `langc eval --words
+# test/eval/words.lang NAME WORDS` must exit STATUS and print `langc: CODE:
+# NAME: ...` on stderr.
+words_refused() {
+  want_status=$1
+  code=$2
+  shift 2
+  status=0
+  build/langc eval --words test/eval/words.lang "$@" 2>"$tmp/err" >/dev/null || status=$?
+  case "$status:$(head -n 1 "$tmp/err")" in
+    "$want_status:langc: $code: $1: "*) ;;
+    *) echo "FAIL eval --words $*: want exit $want_status and $code, got exit $status"; fail=$((fail + 1)) ;;
+  esac
+}
+words_refused 1 EVAL_ENTRY cmCarrier
+words_refused 2 EVAL_ARGS wKey 0 x
+words_refused 1 EVAL_ENTRY nope
+
+# The stream ABI in Wasm (a smoke; Q-S3-10 (a)): `langc build --words` makes
+# each PROGRAM def with a stream form an entry, and `run-wasm.mjs --words`
+# prints its output words, or `trap`.
+wsw="$tmp/words.wasm"
+streamrows=0
+if build/langc build --words test/eval/words.lang -o "$wsw" 2>"$tmp/err" && wasm-validate "$wsw" 2>>"$tmp/err"; then
+  for row in 'wPair 3 => 1 3 1 4 0' 'wDecide 4 1 1 1 1 => 2' 'wKey 0 5 9 => trap' 'wKey 0 7 => 7' 'wOpt 2 5 => trap' \
+    'wSame 1 4 1 5 0 => 1 4 1 5 0' 'wTree 1 0 1 0 0 => 1 0 1 0 0' 'wTree 1 1 0 0 0 => 1 1 0 0 0'; do
+    set -- ${row%% => *}
+    got=$(node test/run-wasm.mjs --words "$wsw" "$@" 2>&1) || true
+    streamrows=$((streamrows + 1))
+    [ "$got" = "${row#* => }" ] || { echo "FAIL build --words $row: got $got"; fail=$((fail + 1)); }
+  done
+else
+  echo "FAIL build --words test/eval/words.lang: $(head -n 1 "$tmp/err")"; fail=$((fail + 1))
+fi
+echo "stream: $streamrows checked"
+
+# The entry streams (Q-S3-3 (a), Q-S3-13 (a)): each row of
+# test/eval/stream.txt is `FILE NAME [WORDS]`. `langc eval --words` and the
+# `build --words` module of FILE must print the same words, or both `trap`.
+# Each `abi --words` name of the two files must have a row.
+for sf in examples/node.lang examples/client.lang; do
+  sw="$tmp/$(basename "$sf" .lang)-words.wasm"
+  if build/langc build --words "$sf" -o "$sw" 2>"$tmp/err" && wasm-validate "$sw" 2>>"$tmp/err"; then
+    for sn in $(build/langc abi --words "$sf"); do
+      awk -v f="$sf" -v n="$sn" '$1 == f && $2 == n { k = 1 } END { exit !k }' test/eval/stream.txt ||
+        { echo "FAIL entry streams: no row for $sf $sn"; fail=$((fail + 1)); }
+    done
+  else
+    echo "FAIL build --words $sf: $(head -n 1 "$tmp/err")"; fail=$((fail + 1))
+  fi
+done
+entryrows=0
+while read -r sf sn swords; do
+  sw="$tmp/$(basename "$sf" .lang)-words.wasm"
+  want=$(build/langc eval --words "$sf" "$sn" $swords 2>/dev/null </dev/null) || true
+  got=$(node test/run-wasm.mjs --words "$sw" "$sn" $swords 2>&1 </dev/null) || true
+  entryrows=$((entryrows + 1))
+  [ "$got" = "$want" ] || { echo "FAIL entry stream $sf $sn $swords: eval '$want', wasm '$got'"; fail=$((fail + 1)); }
+done < test/eval/stream.txt
+echo "entry streams: $entryrows rows"
 
 rm -rf "$tmp"
 

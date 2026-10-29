@@ -563,9 +563,9 @@ void ir_print(const IrProgram *prog, FILE *out) {
   for (i = 0; i < prog->func_count; i++) {
     const IrFunc *fn = &prog->funcs[i];
     fprintf(out, "func %s (", fn->name);
-    for (k = 0; k < fn->param_count; k++)
+    for (k = 0; k < fn->param_count && !fn->stream; k++)
       fprintf(out, "%s%s", k == 0 ? "" : ", ", scalar_word(fn->params[k]));
-    fprintf(out, ") -> %s, %u locals\n", scalar_word(fn->result), (unsigned)fn->local_count);
+    fprintf(out, "%s) -> %s, %u locals\n", fn->stream ? "stream" : "", fn->stream ? "stream" : scalar_word(fn->result), (unsigned)fn->local_count);
     block_print(&fn->body, out, 1u);
   }
 }
@@ -989,19 +989,26 @@ static int unfold(Low *l, Buf *b, const Value *v, Operand *out) {
          guard(l, b, lim.f, res, &in);
 }
 
+/* The first case of V: an ind has its motive before the cases. */
+static uint32_t fam_first(const Value *v) {
+  return v->op == OP_IND_FAMILY ? 1u : 0u;
+}
+
 /* A fold step at the node ADDR of the constructor C: ACC := FN applied to
-   the fields, with ACC for the recursive field R. */
-static int fam_case(Low *l, Buf *b, const IrExpr *addr, const Value *fn, const CtorInfo *c, uint32_t r, Slot acc) {
+   the fields, with ACC for the recursive field R. With PARA (an ind), FN
+   takes each field, then ACC after the field R, as ind_family in eval.c. */
+static int fam_case(Low *l, Buf *b, const IrExpr *addr, const Value *fn, const CtorInfo *c, uint32_t r, int para, Slot acc) {
+  uint32_t ih = para && r < c->field_count ? 1u : 0u;
   Operand *args = arena_alloc(l->m->arena, ((size_t)c->field_count + 1u) * sizeof *args);
   uint32_t k;
   if (args == NULL)
     return oom(l);
   for (k = 0; k < c->field_count; k++)
-    if (k != r && !field_at(l, b, addr, k, &args[k]))
+    if ((para || k != r) && !field_at(l, b, addr, k, &args[k + (ih && k > r ? 1u : 0u)]))
       return 0;
   if (r < c->field_count)
-    args[r] = slot_get(l, acc);
-  return apply_into(l, b, fn, args, c->field_count, acc);
+    args[r + ih] = slot_get(l, acc);
+  return apply_into(l, b, fn, args, c->field_count + ih, acc);
 }
 
 /* SWITCH on the tag of the node at ADDR into ACC. When REC_ARMS is 1, the
@@ -1011,13 +1018,14 @@ static int fam_case(Low *l, Buf *b, const IrExpr *addr, const Value *fn, const C
 static int fam_switch(Low *l, Buf *b, const IrExpr *addr, const Value *v, const uint32_t *rec, int rec_arms, Slot acc) {
   const FamilyInfo *fam = &l->m->families[v->inst];
   IrBlock *arms = arena_alloc(l->m->arena, ((size_t)fam->ctor_count + 1u) * sizeof *arms);
+  const uint32_t first = fam_first(v);
   Buf arm;
   uint32_t i;
   if (arms == NULL)
     return oom(l);
   for (i = 0; i < fam->ctor_count; i++) {
     arm = buf_under(b);
-    if (!((rec[i] != NO_REC) == rec_arms ? fam_case(l, &arm, addr, v->args[i], &l->m->ctors[fam->first_ctor + i], rec[i], acc)
+    if (!((rec[i] != NO_REC) == rec_arms ? fam_case(l, &arm, addr, v->args[first + i], &l->m->ctors[fam->first_ctor + i], rec[i], (int)first, acc)
                                          : store(l, &arm, acc, trap_value(l))))
       return 0;
     arms[i] = block_of(&arm);
@@ -1025,7 +1033,7 @@ static int fam_switch(Low *l, Buf *b, const IrExpr *addr, const Value *v, const 
   return st_switch(l, b, ex_load(l, addr, 0), arms, fam->ctor_count);
 }
 
-/* A fold over a linear family: the walk, the base node into ACC, then a
+/* A fold or an ind over a linear family: the walk, the base node into ACC, then a
    pass from the last recursive node with ACC for its recursive field. */
 static int family_spine(Low *l, Buf *b, const Value *v, const uint32_t *rec, Operand *out) {
   const FamilyInfo *fam = &l->m->families[v->inst];
@@ -1036,7 +1044,7 @@ static int family_spine(Low *l, Buf *b, const Value *v, const uint32_t *rec, Ope
   Buf in = buf_under(b);
   Buf body = buf_under(b);
   *out = slot_get(l, acc);
-  return lower(l, b, v->args[fam->ctor_count], &x) && walk(l, b, x, rec, fam->ctor_count, &w) &&
+  return lower(l, b, v->args[fam_first(v) + fam->ctor_count], &x) && walk(l, b, x, rec, fam->ctor_count, &w) &&
          fam_switch(l, &in, ex_local(l, w.cur), v, rec, 0, acc) && guard(l, b, ex_local(l, w.end), acc, &in) &&
          chain_node(l, &body, &w, &node) && fam_switch(l, &body, node, v, rec, 1, acc) && chain_end(l, b, &w, &body);
 }
@@ -1063,11 +1071,11 @@ static int family_fold(Low *l, Buf *b, const Value *v, Operand *out) {
       recs[i] = c->fields[k].recursive ? k : recs[i];
     }
     if (here > 1u)
-      return diag_fail(l->m->diag, "REFUSE_RUNTIME_TREE", l->m->def, "a fold over a tree of %s must exist at run time (HOST-LIMIT)", fam->name);
+      return diag_fail(l->m->diag, "REFUSE_RUNTIME_TREE", l->m->def, "a fold or an ind over a tree of %s must exist at run time (HOST-LIMIT)", fam->name);
     rec += here;
     fields[i] = c->field_count;
   }
-  return rec != 0 ? family_spine(l, b, v, recs, out) : cases_of(l, b, v->args[fam->ctor_count], v->args, fields, fam->ctor_count, out);
+  return rec != 0 ? family_spine(l, b, v, recs, out) : cases_of(l, b, v->args[fam_first(v) + fam->ctor_count], v->args + fam_first(v), fields, fam->ctor_count, out);
 }
 
 /* The two arms of an option or a sum, behind the guard on the flag of X. */
@@ -1149,6 +1157,29 @@ static int fold_nat(Low *l, Buf *b, const Value *v, Operand *out) {
          st_repeat(l, &in, n.w, &body) && guard(l, b, n.f, acc, &in);
 }
 
+/* ACC := Z and K := 0, then ACC := STEP K ACC and K := K + 1, N times.
+   K + 1 cannot overflow, because K < N. */
+static int ind_nat(Low *l, Buf *b, const Value *v, Operand *out) {
+  Operand n;
+  Operand a[2];
+  uint32_t k = local_new(l);
+  Slot acc = slot_new(l);
+  Buf in = buf_under(b);
+  Buf body = buf_under(&in);
+  *out = slot_get(l, acc);
+  a[0] = operand(ex_local(l, k), ex_const(l, 0));
+  a[1] = slot_get(l, acc);
+  return lower(l, b, v->args[3], &n) && lower_into(l, &in, v->args[1], acc) && set(l, &in, k, ex_const(l, 0)) &&
+         apply_into(l, &body, v->args[2], a, 2, acc) && set(l, &body, k, ex_bin(l, IR_OP_ADD, ex_local(l, k), ex_const(l, 1))) &&
+         st_repeat(l, &in, n.w, &body) && guard(l, b, n.f, acc, &in);
+}
+
+/* An ind over an option is the case split of option (ind P n s o). */
+static int ind_option(Low *l, Buf *b, const Value *v, Operand *out) {
+  static const uint32_t fields[2] = {0u, 1u};
+  return cases_of(l, b, v->args[3], v->args + 1, fields, 2, out);
+}
+
 /* Proof contents erase, but forcing a proof must preserve its trap flag. */
 static int proof_op(Low *l, Buf *b, const Value *v, uint32_t first, uint32_t count, Operand *out) {
   Operand p;
@@ -1219,9 +1250,11 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_FOLD_NAT:
     return fold_nat(l, b, v, out);
   case OP_IND_NAT:
+    return ind_nat(l, b, v, out);
   case OP_IND_FAMILY:
+    return family_fold(l, b, v, out);
   case OP_IND_OPTION:
-    return diag_fail(l->m->diag, "REFUSE_RUNTIME_TREE", l->m->def, "an ind over a run-time Nat, Option or domain value is not in the Wasm host (HOST-LIMIT): ind is for proofs");
+    return ind_option(l, b, v, out);
   case OP_FOLD_LIST:
     return fold_list(l, b, v, out);
   case OP_UNFOLD:
@@ -1324,17 +1357,535 @@ static int lower_entry(Machine *m, uint32_t index, const Entry *e, IrFunc *fn) {
   fn->params = params;
   fn->param_count = e->param_count;
   fn->result = e->result_bool ? IR_SCALAR_BOOL : IR_SCALAR_NAT;
+  fn->stream = 0;
   fn->local_count = l.local_count;
   fn->body = block_of(&body);
   return 1;
 }
 
-int lower_program(Machine *m, IrProgram *prog) {
+/* The stream ABI (Q-S3-7) of an entry with a stream form (`--words`). Local
+   0 is the count n of the input words at address 0. The parameters are
+   decoded from the words in order. A short stream, a bad tag, a Bool larger
+   than 1, a false Eq Nat or a word left over runs TRAP. The result is encoded
+   at the end of the heap as the block [m, the m words]. A recursive family
+   uses a stack machine; each stack is a chain of heap blocks (Q-S3-12 (b)). */
+typedef struct {
+  uint32_t cur;   /* the address of the next input word */
+  uint32_t end;   /* 8n */
+  uint32_t out;   /* the output words, the last first: blocks [word, next] */
+  uint32_t count; /* the output word count */
+} Stream;
+
+/* LOCAL := a new block of the N words FIELDS. The block goes into a new
+   local first, so a field can read LOCAL. */
+static int push(Low *l, Buf *b, uint32_t local, const IrExpr **fields, uint32_t n) {
+  const IrExpr **words = arena_alloc(l->m->arena, ((size_t)n + 1u) * sizeof *words);
+  IrStmt *s = stmt_new(l, IR_STMT_ALLOC);
+  uint32_t i;
+  int ok = 1;
+  if (words == NULL || s == NULL)
+    return words == NULL ? oom(l) : 0;
+  for (i = 0; i < n; i++) {
+    words[i] = fields[i];
+    ok = ok && fields[i] != NULL;
+  }
+  s->local = local_new(l);
+  s->fields = words;
+  s->field_count = n;
+  return ok && emit(l, b, s) && set(l, b, local, ex_local(l, s->local));
+}
+
+/* TRAP when C is not 0. A constant C folds away. */
+static int trap_when(Low *l, Buf *b, const IrExpr *c) {
+  Buf trap = buf_under(b);
+  Buf none = buf_under(b);
+  return emit(l, &trap, stmt_new(l, IR_STMT_TRAP)) && if_flag(l, b, c, &trap, &none);
+}
+
+/* W := the next input word. A short stream traps. */
+static int read_word(Low *l, Buf *b, const Stream *st, const IrExpr **w) {
+  uint32_t t = local_new(l);
+  *w = ex_local(l, t);
+  return trap_when(l, b, ex_bin(l, IR_OP_LE, ex_local(l, st->end), ex_local(l, st->cur))) &&
+         set(l, b, t, ex_load(l, ex_local(l, st->cur), 0)) &&
+         set(l, b, st->cur, ex_bin(l, IR_OP_ADD, ex_local(l, st->cur), ex_const(l, 8)));
+}
+
+/* 1 when a constructor of F has a recursive field. */
+static int fam_recursive(const Machine *m, const FamilyInfo *f) {
+  uint32_t k;
+  uint32_t j;
+  int rec = 0;
+  for (k = 0; k < f->ctor_count; k++)
+    for (j = 0; j < m->ctors[f->first_ctor + k].field_count; j++)
+      rec = rec || m->ctors[f->first_ctor + k].fields[j].recursive;
+  return rec;
+}
+
+/* The states of the stack machine of F: the constructor K with N fields has
+   the states BASE[K] + I, I = 0 to N. BASE[K] + I = "field I is next", and
+   BASE[K] + N = "the constructor is done". *STATES = the state count. */
+static uint32_t *fam_base(Low *l, const FamilyInfo *f, uint32_t *states) {
+  uint32_t *base = arena_alloc(l->m->arena, ((size_t)f->ctor_count + 1u) * sizeof *base);
+  uint32_t k;
+  uint32_t s = 0;
+  if (base == NULL) {
+    oom(l);
+    return NULL;
+  }
+  for (k = 0; k < f->ctor_count; k++) {
+    base[k] = s;
+    s += l->m->ctors[f->first_ctor + k].field_count + 1u;
+  }
+  *states = s;
+  return base;
+}
+
+/* FRAMES := a new frame [STATE, NODE, the next frame] (NODE is NULL for a
+   frame [STATE, the next frame]). NEXT is the next frame. */
+static int frame(Low *l, Buf *b, uint32_t frames, uint32_t state, const IrExpr *node, const IrExpr *next) {
+  const IrExpr *w[3];
+  w[0] = ex_const(l, state);
+  w[1] = node == NULL ? next : node;
+  w[2] = next;
+  return push(l, b, frames, w, node == NULL ? 2u : 3u);
+}
+
+static int decode(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Operand *out);
+
+/* The fields of the constructor K of the family type T, decoded in order
+   into the block [K, the fields]. */
+static int decode_ctor(Low *l, Buf *b, Stream *st, const Value *t, uint32_t k, unsigned depth, Operand *out) {
+  const FamilyInfo *f = &l->m->families[t->inst];
+  const CtorInfo *c = &l->m->ctors[f->first_ctor + k];
+  const Env *env = words_env(l->m, t->args, f->param_count);
+  Operand *ops = arena_alloc(l->m->arena, ((size_t)c->field_count + 1u) * sizeof *ops);
+  uint32_t j;
+  int ok = ops != NULL || oom(l);
+  for (j = 0; j < c->field_count && ok; j++)
+    ok = decode(l, b, st, eval_core(l->m, env, c->fields[j].type), depth + 1, &ops[j]);
+  return ok && block_ops(l, b, k, ops, c->field_count, out);
+}
+
+static int decode_option(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Operand *out) {
+  IrBlock *arms = arena_alloc(l->m->arena, 2u * sizeof *arms);
+  Slot res = slot_new(l);
+  Buf none = buf_under(b);
+  Buf some = buf_under(b);
+  const IrExpr *tag;
+  Operand x;
+  Operand o;
+  if (arms == NULL)
+    return oom(l);
+  if (!read_word(l, b, st, &tag) || !block_ops(l, &none, 0, NULL, 0, &o) || !store(l, &none, res, o) ||
+      !decode(l, &some, st, t->args[0], depth + 1, &x) || !block_ops(l, &some, 1, &x, 1u, &o) || !store(l, &some, res, o))
+    return 0;
+  arms[0] = block_of(&none);
+  arms[1] = block_of(&some);
+  *out = slot_get(l, res);
+  return st_switch(l, b, tag, arms, 2u);
+}
+
+/* A family without a recursive field: the tag, then the fields. */
+static int decode_family(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Operand *out) {
+  const FamilyInfo *f = &l->m->families[t->inst];
+  IrBlock *arms = arena_alloc(l->m->arena, ((size_t)f->ctor_count + 1u) * sizeof *arms);
+  Slot res = slot_new(l);
+  const IrExpr *tag;
+  Buf arm;
+  Operand o;
+  uint32_t k;
+  if (arms == NULL)
+    return oom(l);
+  if (!read_word(l, b, st, &tag))
+    return 0;
+  for (k = 0; k < f->ctor_count; k++) {
+    arm = buf_under(b);
+    if (!decode_ctor(l, &arm, st, t, k, depth, &o) || !store(l, &arm, res, o))
+      return 0;
+    arms[k] = block_of(&arm);
+  }
+  *out = slot_get(l, res);
+  return st_switch(l, b, tag, arms, f->ctor_count);
+}
+
+/* Reads a tag of F and pushes the first state of its constructor on the
+   frame stack FRAMES. A bad tag traps. */
+static int open_frame(Low *l, Buf *b, Stream *st, const FamilyInfo *f, const uint32_t *base, uint32_t frames) {
+  IrBlock *arms = arena_alloc(l->m->arena, ((size_t)f->ctor_count + 1u) * sizeof *arms);
+  const IrExpr *tag;
+  Buf arm;
+  uint32_t k;
+  if (arms == NULL)
+    return oom(l);
+  if (!read_word(l, b, st, &tag))
+    return 0;
+  for (k = 0; k < f->ctor_count; k++) {
+    arm = buf_under(b);
+    if (!frame(l, &arm, frames, base[k], NULL, ex_local(l, frames)))
+      return 0;
+    arms[k] = block_of(&arm);
+  }
+  return st_switch(l, b, tag, arms, f->ctor_count);
+}
+
+/* The arm of the state "constructor K is done": pop its N operands from the
+   value stack VALUES (the last field on top), and push the block. */
+static int decode_done(Low *l, Buf *b, uint32_t k, uint32_t n, uint32_t frames, uint32_t values, uint32_t cont) {
+  Operand *ops = arena_alloc(l->m->arena, ((size_t)n + 1u) * sizeof *ops);
+  const IrExpr *w[3];
+  Operand o;
+  Slot s;
+  uint32_t j;
+  int ok = ops != NULL || oom(l);
+  for (j = n; j > 0 && ok; j--) {
+    s = slot_new(l);
+    ops[j - 1u] = slot_get(l, s);
+    ok = store(l, b, s, operand(ex_load(l, ex_local(l, values), 0), ex_load(l, ex_local(l, values), 1))) &&
+         set(l, b, values, ex_load(l, ex_local(l, values), 2));
+  }
+  if (!ok || !block_ops(l, b, k, ops, n, &o))
+    return 0;
+  w[0] = o.w;
+  w[1] = o.f;
+  w[2] = ex_local(l, values);
+  return push(l, b, values, w, 3u) && set(l, b, frames, ex_load(l, ex_local(l, frames), 1)) &&
+         set(l, b, cont, ex_local(l, frames));
+}
+
+/* A recursive family: a WHILE over the frame stack (blocks [state, next])
+   with a value stack (blocks [word, flag, next]). Each step reads a word or
+   ends a frame, thus SPINE_FUEL never runs out first. */
+static int decode_tree(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Operand *out) {
+  const FamilyInfo *f = &l->m->families[t->inst];
+  const Env *env = words_env(l->m, t->args, f->param_count);
+  uint32_t states = 0;
+  uint32_t *base = fam_base(l, f, &states);
+  IrBlock *arms = arena_alloc(l->m->arena, ((size_t)states + 1u) * sizeof *arms);
+  uint32_t frames = local_new(l);
+  uint32_t values = local_new(l);
+  uint32_t cont = local_new(l);
+  uint32_t state = local_new(l);
+  Slot res = slot_new(l);
+  Buf body = buf_under(b);
+  Buf arm;
+  const IrExpr *w[3];
+  const CtorInfo *c;
+  Operand o;
+  uint32_t k;
+  uint32_t i;
+  int ok;
+  if (base == NULL || arms == NULL)
+    return base == NULL ? 0 : oom(l);
+  if (!set(l, b, frames, ex_const(l, 0)) || !set(l, b, values, ex_const(l, 0)) || !open_frame(l, b, st, f, base, frames) ||
+      !set(l, b, cont, ex_const(l, 1)) || !set(l, &body, state, ex_load(l, ex_local(l, frames), 0)))
+    return 0;
+  for (k = 0; k < f->ctor_count; k++) {
+    c = &l->m->ctors[f->first_ctor + k];
+    for (i = 0; i <= c->field_count; i++) {
+      arm = buf_under(&body);
+      if (i == c->field_count)
+        ok = decode_done(l, &arm, k, i, frames, values, cont);
+      else if (c->fields[i].recursive)
+        ok = frame(l, &arm, frames, base[k] + i + 1u, NULL, ex_load(l, ex_local(l, frames), 1)) &&
+             open_frame(l, &arm, st, f, base, frames);
+      else {
+        ok = frame(l, &arm, frames, base[k] + i + 1u, NULL, ex_load(l, ex_local(l, frames), 1)) &&
+             decode(l, &arm, st, eval_core(l->m, env, c->fields[i].type), depth + 1, &o);
+        w[0] = o.w;
+        w[1] = o.f;
+        w[2] = ex_local(l, values);
+        ok = ok && push(l, &arm, values, w, 3u);
+      }
+      if (!ok)
+        return 0;
+      arms[base[k] + i] = block_of(&arm);
+    }
+  }
+  *out = slot_get(l, res);
+  return st_switch(l, &body, ex_local(l, state), arms, states) &&
+         st_while(l, b, ex_const(l, SPINE_FUEL), cont, &body) &&
+         store(l, b, res, operand(ex_load(l, ex_local(l, values), 0), ex_load(l, ex_local(l, values), 1)));
+}
+
+static int decode(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Operand *out) {
+  const IrExpr *w;
+  const Value *x;
+  Operand ops[2];
+  if (t == NULL)
+    return got(l, t);
+  if (depth > EVAL_DEPTH_LIMIT)
+    return internal(l, "a stream type nested too deep");
+  if (t->kind == VAL_SIGMA) {
+    if (!decode(l, b, st, t->dom, depth + 1, &ops[0]))
+      return 0;
+    x = fresh(l, ops[0]);
+    return x != NULL && decode(l, b, st, closure_apply(l->m, t, x), depth + 1, &ops[1]) &&
+           block_ops(l, b, 0, ops, 2u, out);
+  }
+  if (t->kind != VAL_OP)
+    return internal(l, "a stream type without a stream form");
+  if (val_is(t, OP_NAT) || val_is(t, OP_BOOL)) {
+    if (!read_word(l, b, st, &w))
+      return 0;
+    *out = operand(w, ex_const(l, 0));
+    return val_is(t, OP_NAT) || trap_when(l, b, ex_bin(l, IR_OP_LE, ex_const(l, 2), w));
+  }
+  if (val_is(t, OP_EQ)) {
+    if (!lower(l, b, t->args[1], &ops[0]) || !lower(l, b, t->args[2], &ops[1]))
+      return 0;
+    return trap_when(l, b, ex_or(l, ex_bin(l, IR_OP_EQ, ex_bin(l, IR_OP_EQ, ops[0].w, ops[1].w), ex_const(l, 0)),
+                                 ex_or(l, ops[0].f, ops[1].f))) &&
+           give(l, out, 0, 0);
+  }
+  if (val_is(t, OP_PROD))
+    return decode(l, b, st, t->args[0], depth + 1, &ops[0]) && decode(l, b, st, t->args[1], depth + 1, &ops[1]) &&
+           block_ops(l, b, 0, ops, 2u, out);
+  if (val_is(t, OP_OPTION))
+    return decode_option(l, b, st, t, depth, out);
+  if (!val_is(t, OP_FAMILY))
+    return internal(l, "a stream type without a stream form");
+  if (fam_recursive(l->m, &l->m->families[t->inst]))
+    return decode_tree(l, b, st, t, depth, out);
+  return decode_family(l, b, st, t, depth, out);
+}
+
+/* One output word: a trapped OP traps (each position is strict, as eval). */
+static int put_word(Low *l, Buf *b, Stream *st, Operand op) {
+  const IrExpr *w[2];
+  w[0] = op.w;
+  w[1] = ex_local(l, st->out);
+  return trap_when(l, b, op.f) && push(l, b, st->out, w, 2u) &&
+         set(l, b, st->count, ex_bin(l, IR_OP_ADD, ex_local(l, st->count), ex_const(l, 1)));
+}
+
+static int encode(Low *l, Buf *b, Stream *st, const Value *t, Operand op, unsigned depth);
+
+/* A family without a recursive field: the tag of the block at ADDR, then
+   its fields. */
+static int encode_family(Low *l, Buf *b, Stream *st, const Value *t, const IrExpr *addr, unsigned depth) {
+  const FamilyInfo *f = &l->m->families[t->inst];
+  const Env *env = words_env(l->m, t->args, f->param_count);
+  IrBlock *arms = arena_alloc(l->m->arena, ((size_t)f->ctor_count + 1u) * sizeof *arms);
+  const IrExpr *tag = atom(l, b, ex_load(l, addr, 0));
+  const CtorInfo *c;
+  Buf arm;
+  uint32_t k;
+  uint32_t j;
+  int ok;
+  if (arms == NULL)
+    return oom(l);
+  if (!put_word(l, b, st, operand(tag, ex_const(l, 0))))
+    return 0;
+  for (k = 0; k < f->ctor_count; k++) {
+    c = &l->m->ctors[f->first_ctor + k];
+    arm = buf_under(b);
+    ok = 1;
+    for (j = 0; j < c->field_count && ok; j++)
+      ok = encode(l, &arm, st, eval_core(l->m, env, c->fields[j].type), field_op(l, addr, j), depth + 1);
+    if (!ok)
+      return 0;
+    arms[k] = block_of(&arm);
+  }
+  return st_switch(l, b, tag, arms, f->ctor_count);
+}
+
+/* Puts the tag of the node at ADDR and pushes the first state of its
+   constructor on the task stack TASKS (blocks [state, node, next]). */
+static int open_task(Low *l, Buf *b, Stream *st, const FamilyInfo *f, const uint32_t *base, uint32_t tasks, const IrExpr *addr) {
+  IrBlock *arms = arena_alloc(l->m->arena, ((size_t)f->ctor_count + 1u) * sizeof *arms);
+  const IrExpr *tag = atom(l, b, ex_load(l, addr, 0));
+  Buf arm;
+  uint32_t k;
+  if (arms == NULL)
+    return oom(l);
+  if (!put_word(l, b, st, operand(tag, ex_const(l, 0))))
+    return 0;
+  for (k = 0; k < f->ctor_count; k++) {
+    arm = buf_under(b);
+    if (!frame(l, &arm, tasks, base[k], addr, ex_local(l, tasks)))
+      return 0;
+    arms[k] = block_of(&arm);
+  }
+  return st_switch(l, b, tag, arms, f->ctor_count);
+}
+
+/* A recursive family in prefix order, as words_encode: a WHILE over the
+   task stack. */
+static int encode_tree(Low *l, Buf *b, Stream *st, const Value *t, const IrExpr *addr, unsigned depth) {
+  const FamilyInfo *f = &l->m->families[t->inst];
+  const Env *env = words_env(l->m, t->args, f->param_count);
+  uint32_t states = 0;
+  uint32_t *base = fam_base(l, f, &states);
+  IrBlock *arms = arena_alloc(l->m->arena, ((size_t)states + 1u) * sizeof *arms);
+  uint32_t tasks = local_new(l);
+  uint32_t cont = local_new(l);
+  uint32_t state = local_new(l);
+  uint32_t node = local_new(l);
+  Buf body = buf_under(b);
+  Buf arm;
+  const CtorInfo *c;
+  Slot child;
+  uint32_t k;
+  uint32_t i;
+  int ok;
+  if (base == NULL || arms == NULL)
+    return base == NULL ? 0 : oom(l);
+  if (!set(l, b, tasks, ex_const(l, 0)) || !open_task(l, b, st, f, base, tasks, addr) || !set(l, b, cont, ex_const(l, 1)) ||
+      !set(l, &body, state, ex_load(l, ex_local(l, tasks), 0)) || !set(l, &body, node, ex_load(l, ex_local(l, tasks), 1)))
+    return 0;
+  for (k = 0; k < f->ctor_count; k++) {
+    c = &l->m->ctors[f->first_ctor + k];
+    for (i = 0; i <= c->field_count; i++) {
+      arm = buf_under(&body);
+      if (i == c->field_count)
+        ok = set(l, &arm, tasks, ex_load(l, ex_local(l, tasks), 2)) && set(l, &arm, cont, ex_local(l, tasks));
+      else if (c->fields[i].recursive) {
+        child = slot_new(l);
+        ok = frame(l, &arm, tasks, base[k] + i + 1u, ex_local(l, node), ex_load(l, ex_local(l, tasks), 2)) &&
+             store(l, &arm, child, field_op(l, ex_local(l, node), i)) && trap_when(l, &arm, ex_local(l, child.f)) &&
+             open_task(l, &arm, st, f, base, tasks, ex_local(l, child.w));
+      } else
+        ok = frame(l, &arm, tasks, base[k] + i + 1u, ex_local(l, node), ex_load(l, ex_local(l, tasks), 2)) &&
+             encode(l, &arm, st, eval_core(l->m, env, c->fields[i].type), field_op(l, ex_local(l, node), i), depth + 1);
+      if (!ok)
+        return 0;
+      arms[base[k] + i] = block_of(&arm);
+    }
+  }
+  return st_switch(l, &body, ex_local(l, state), arms, states) && st_while(l, b, ex_const(l, SPINE_FUEL), cont, &body);
+}
+
+static int encode_option(Low *l, Buf *b, Stream *st, const Value *t, const IrExpr *addr, unsigned depth) {
+  IrBlock *arms = arena_alloc(l->m->arena, 2u * sizeof *arms);
+  const IrExpr *tag = atom(l, b, ex_load(l, addr, 0));
+  Buf none = buf_under(b);
+  Buf some = buf_under(b);
+  if (arms == NULL)
+    return oom(l);
+  if (!put_word(l, b, st, operand(tag, ex_const(l, 0))) || !encode(l, &some, st, t->args[0], field_op(l, addr, 0), depth + 1))
+    return 0;
+  arms[0] = block_of(&none);
+  arms[1] = block_of(&some);
+  return st_switch(l, b, tag, arms, 2u);
+}
+
+static int encode(Low *l, Buf *b, Stream *st, const Value *t, Operand op, unsigned depth) {
+  const IrExpr *addr;
+  const Value *x;
+  if (t == NULL)
+    return got(l, t);
+  if (depth > EVAL_DEPTH_LIMIT)
+    return internal(l, "a stream type nested too deep");
+  if (t->kind == VAL_OP && (val_is(t, OP_NAT) || val_is(t, OP_BOOL)))
+    return put_word(l, b, st, op);
+  if (t->kind == VAL_OP && val_is(t, OP_EQ))
+    return trap_when(l, b, op.f);
+  if (!trap_when(l, b, op.f) || (addr = atom(l, b, op.w)) == NULL)
+    return 0;
+  if (t->kind == VAL_SIGMA) {
+    x = fresh(l, field_op(l, addr, 0));
+    return x != NULL && encode(l, b, st, t->dom, field_op(l, addr, 0), depth + 1) &&
+           encode(l, b, st, closure_apply(l->m, t, x), field_op(l, addr, 1), depth + 1);
+  }
+  if (t->kind != VAL_OP)
+    return internal(l, "a stream type without a stream form");
+  if (val_is(t, OP_PROD))
+    return encode(l, b, st, t->args[0], field_op(l, addr, 0), depth + 1) &&
+           encode(l, b, st, t->args[1], field_op(l, addr, 1), depth + 1);
+  if (val_is(t, OP_OPTION))
+    return encode_option(l, b, st, t, addr, depth);
+  if (!val_is(t, OP_FAMILY))
+    return internal(l, "a stream type without a stream form");
+  if (fam_recursive(l->m, &l->m->families[t->inst]))
+    return encode_tree(l, b, st, t, addr, depth);
+  return encode_family(l, b, st, t, addr, depth);
+}
+
+/* The output block at the end of the heap: [m, the m words]. The output
+   chain has the last word first: reverse it, then copy each word into a new
+   1-word block. Back-to-back ALLOCs are contiguous. */
+static int output(Low *l, Buf *b, Stream *st) {
+  uint32_t q = local_new(l);
+  uint32_t res = local_new(l);
+  uint32_t word = local_new(l);
+  Buf rev = buf_under(b);
+  Buf copy = buf_under(b);
+  const IrExpr *w[2];
+  w[0] = ex_load(l, ex_local(l, st->out), 0);
+  w[1] = ex_local(l, q);
+  if (!set(l, b, q, ex_const(l, 0)) || !push(l, &rev, q, w, 2u) ||
+      !set(l, &rev, st->out, ex_load(l, ex_local(l, st->out), 1)) || !st_repeat(l, b, ex_local(l, st->count), &rev))
+    return 0;
+  w[0] = ex_local(l, st->count);
+  if (!push(l, b, res, w, 1u))
+    return 0;
+  w[0] = ex_load(l, ex_local(l, q), 0);
+  return push(l, &copy, word, w, 1u) && set(l, &copy, q, ex_load(l, ex_local(l, q), 1)) &&
+         st_repeat(l, b, ex_local(l, st->count), &copy) && emit(l, b, stmt_expr(l, IR_STMT_RETURN, ex_local(l, res)));
+}
+
+/* The stream entry INDEX with PARAM_COUNT parameters (words_entry). */
+static int lower_stream(Machine *m, uint32_t index, uint32_t param_count, IrFunc *fn) {
+  Low l;
+  Buf body = buf_under(NULL);
+  IrScalar *params = arena_alloc(m->arena, 2u * sizeof *params);
+  Stream st;
+  const Value *v;
+  const Value *t;
+  const Value *x;
+  Operand op;
+  Operand r;
+  uint32_t k;
+  int ok;
+  memset(&l, 0, sizeof l);
+  l.m = m;
+  l.local_count = 1u;
+  m->def = m->defs[index].name;
+  m->fuel = EVAL_FUEL_STEPS;
+  if (params == NULL)
+    return oom(&l);
+  st.cur = local_new(&l);
+  st.end = local_new(&l);
+  st.out = local_new(&l);
+  st.count = local_new(&l);
+  ok = set(&l, &body, st.end, ex_bin(&l, IR_OP_MUL, ex_local(&l, 0), ex_const(&l, 8))) &&
+       set(&l, &body, st.cur, ex_const(&l, 0)) && set(&l, &body, st.out, ex_const(&l, 0)) &&
+       set(&l, &body, st.count, ex_const(&l, 0));
+  v = def_value(m, index);
+  t = m->defs[index].type;
+  for (k = 0; k < param_count && ok; k++) {
+    ok = v != NULL && t != NULL && t->kind == VAL_PI && decode(&l, &body, &st, t->dom, 0, &op);
+    x = ok ? fresh(&l, op) : NULL;
+    ok = x != NULL;
+    v = ok ? apply_value(m, v, x) : NULL;
+    t = ok ? closure_apply(m, t, x) : NULL;
+  }
+  /* A word left over traps. */
+  ok = ok && trap_when(&l, &body, ex_bin(&l, IR_OP_EQ, ex_bin(&l, IR_OP_EQ, ex_local(&l, st.cur), ex_local(&l, st.end)), ex_const(&l, 0)));
+  if (!ok || !got(&l, v) || !lower(&l, &body, v, &r) || !encode(&l, &body, &st, t, r, 0) || !output(&l, &body, &st))
+    return m->diag->set ? 0 : internal(&l, "a stream entry that does not lower");
+  params[0] = IR_SCALAR_NAT;
+  fn->name = m->defs[index].name;
+  fn->params = params;
+  fn->param_count = 1;
+  fn->result = IR_SCALAR_NAT;
+  fn->local_count = l.local_count;
+  fn->body = block_of(&body);
+  fn->stream = 1;
+  return 1;
+}
+
+/* WORDS = 1 (`--words`, Q-S3-10 (a)): a PROGRAM def that is not a scalar
+   entry and has a stream form is a stream entry. */
+int lower_program(Machine *m, IrProgram *prog, int words) {
   IrFunc *funcs = arena_alloc(m->arena, ((size_t)m->def_count + 1u) * sizeof *funcs);
   Entry e;
   size_t n = 0;
   uint32_t i;
+  uint32_t params;
   int entry;
+  int stream;
   runtime_begin(m);
   prog->funcs = funcs;
   prog->func_count = 0;
@@ -1343,9 +1894,10 @@ int lower_program(Machine *m, IrProgram *prog) {
   for (i = 0; i < m->def_count; i++) {
     m->fuel = EVAL_FUEL_STEPS;
     entry = m->defs[i].origin == ORIGIN_PROGRAM && entry_of(m, m->defs[i].type, &e);
-    if (entry && !lower_entry(m, i, &e, &funcs[n]))
+    stream = !entry && words && m->defs[i].origin == ORIGIN_PROGRAM && words_entry(m, m->defs[i].type, &params);
+    if ((entry && !lower_entry(m, i, &e, &funcs[n])) || (stream && !lower_stream(m, i, params, &funcs[n])))
       return 0;
-    n += entry ? 1u : 0u;
+    n += entry || stream ? 1u : 0u;
   }
   prog->func_count = n;
   return 1;

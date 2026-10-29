@@ -46,7 +46,7 @@ make -C hosts/tcc-wasm check-clang
 `check-clang` compiles the same sources with
 `cc -std=c99 -Wall -Wextra -Wswitch-enum -Werror -fsyntax-only`.
 `check` does both steps, then runs `test/gate.sh`.
-The gate needs `node`, `wasm-validate` and `wasm-objdump` on the `PATH`.
+The checks need `node`, `wasm-validate`, `wasm-objdump` and `wasm-interp` on the `PATH`.
 `PIN` records the tool versions of the last GREEN gate.
 The build and the gate need no network access.
 
@@ -82,9 +82,10 @@ The compiler enforces these rules:
 ```sh
 build/langc check [--json] PROG
 build/langc eval PROG NAME [ARGS...]
-build/langc ir PROG
-build/langc abi PROG
-build/langc build PROG -o OUT [--runtime]
+build/langc eval --words PROG NAME [WORDS...]
+build/langc ir [--words] PROG
+build/langc abi [--words] PROG
+build/langc build [--words] PROG -o OUT [--runtime]
 build/langc fmt PROG
 ```
 
@@ -98,6 +99,12 @@ build/langc fmt PROG
 - `abi` prints the name of each entry, one for each line.
 - `build` writes the Wasm module to `OUT`. On this target, `--runtime`
   gives the same bytes.
+- `--words` adds the stream entries: each program definition that is not
+  an entry and has a stream form. `eval --words` reads the input words and
+  prints the output words. In Wasm, a stream entry is `(n : i64) -> i64`.
+  The module exports `memory`. The host writes the n input words from byte
+  0, and the entry returns the byte address of the output (the count m,
+  then the m words). A bad stream traps.
 
 The exit status is 0 for success, 1 for a refused program and 2 for a
 usage or IO error. A diagnostic on stderr has the form
@@ -123,7 +130,7 @@ lowering puts its body into a loop or a branch. The lowering refuses two
 programs with a HOST-LIMIT code (see `docs/host/CAPABILITY.md`):
 
 - `REFUSE_RUNTIME_CLOSURE`: a function value must exist at run time.
-- `REFUSE_RUNTIME_TREE`: a fold walks a tree that exists only at run time.
+- `REFUSE_RUNTIME_TREE`: a fold or an ind walks a tree that exists only at run time.
 
 ## Lazy traps
 
@@ -171,15 +178,18 @@ how the domain is organized.
 
 | Line | What the gate does |
 |---|---|
-| `examples: 11 checked, 0 failed` | `langc check` accepts each `examples/*.lang` file |
+| `examples: 15 checked, 0 failed` | `langc check` accepts each `examples/*.lang` file |
 | `parse refusals: 9 checked` | each `test/parse` file fails with the code in `test/parse/expect.txt`; one file has 1100 nested parentheses |
 | `check refusals: 18 checked` | each `test/check` mutant fails with the code in `test/check/expect.txt`; the `TYPE_REFL` message shows both normal forms |
-| `evals: 30 checked` | `langc eval` gives each result in `test/eval/expect.txt` |
-| `ir: 11 lowered` | `langc ir` lowers each example, with one `func` for each `abi` line |
-| `wasm: 14 modules valid` | `langc build` writes a module for each example and for `test/ir/spine.lang`, `test/ir/lazy.lang` and `test/ir/proof-trap.lang`; `wasm-validate` and `wasm-objdump -x` accept it |
-| `differential: 770 cases, 0 mismatches` | node runs each entry on the grid of `test/grid.awk`; each result is equal to the `langc eval` result, and a trap is equal to a trap |
-| `fmt: 51 canonical, 3 non-canonical pairs` | `langc fmt` keeps each committed `.lang` file and each canonical `test/fmt` file the same; it is idempotent, and its output parses to the same terms; each non-canonical `test/fmt` input gives its expected canonical text |
-| `json: 20 fixtures; diagnostics: 32 codes, 18 with a fixture, 14 with no fixture` | each `test/json` fixture gives the JSON shape of its code; each fixture code is in `docs/DIAGNOSTICS.md` |
+| `evals: 33 checked` | `langc eval` gives each result in `test/eval/expect.txt` |
+| `ir: 15 lowered` | `langc ir` lowers each example, with one `func` for each `abi` line |
+| `wasm: 22 modules valid` | `langc build` writes a module for each example and for the 7 files `test/ir/spine.lang`, `lazy.lang`, `proof-trap.lang`, `nat-effects.lang`, `ind.lang`, `optind.lang` and `para.lang`; `wasm-validate` and `wasm-objdump -x` accept it |
+| `differential: 1094 cases, 0 mismatches` | node runs each entry on the grid of `test/grid.awk`; each result is equal to the `langc eval` result, and a trap is equal to a trap |
+| `words: 23 checked` | each line of `test/eval/words.txt` is `NAME [WORDS] => OUTPUT`; `langc eval --words test/eval/words.lang NAME WORDS` exits 0 and prints OUTPUT |
+| `stream: 8 checked` | a smoke of the stream ABI: `langc build --words` makes each program def with a stream form an entry, and `run-wasm.mjs --words` prints its output words, or `trap` |
+| `entry streams: 41 rows` | each row of `test/eval/stream.txt` is `FILE NAME [WORDS]`; `langc eval --words` and the `build --words` module of `examples/node.lang` or `examples/client.lang` print the same words, and a trap is equal to a trap; each `abi --words` name of the two files has a row |
+| `fmt: 61 canonical, 3 non-canonical pairs` | `langc fmt` keeps each committed `.lang` file and each canonical `test/fmt` file the same; it is idempotent, and its output parses to the same terms; each non-canonical `test/fmt` input gives its expected canonical text |
+| `json: 21 fixtures; diagnostics: 34 codes, 18 with a fixture, 16 with no fixture` | each `test/json` fixture gives the JSON shape of its code; each fixture code is in `docs/DIAGNOSTICS.md` |
 | `gate: 0 failures` | the sum of all failures |
 
 The gate also checks the usage and IO exit codes, five `eval` refusals,

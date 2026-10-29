@@ -48,7 +48,7 @@ members4 : FreeMon Address
 members4 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmNil Address))))
 
 kappaEx4 : Kappa
-kappaEx4 = pack members4 (pack 3 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 3 c)))
+kappaEx4 = pack members4 (pack 3 (pack 4 (ruleThreshold 3)))
 
 -- A receipt with the key 5 and the value 40.
 receiptEx : Receipt natCMon
@@ -391,7 +391,7 @@ motNotMember : Eq (T natCMon (St natCMon)) (runMotion natCMon (address 9) kappaE
 motNotMember = refl
 
 kappaBad : Kappa
-kappaBad = pack members4 (pack 1 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 1 c)))
+kappaBad = pack members4 (pack 1 (pack 4 (ruleThreshold 1)))
 
 kappaBadWf : Eq Bool (kappaWellFormed kappaBad) false
 kappaBadWf = refl
@@ -423,7 +423,7 @@ members7 : FreeMon Address
 members7 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmCons Address (address 5) (fmCons Address (address 6) (fmCons Address (address 7) (fmNil Address)))))))
 
 kappaEx7 : Kappa
-kappaEx7 = pack members7 (pack 5 (pack 5 (λ (c : Tally 7) → thetaThreshold 7 5 c)))
+kappaEx7 = pack members7 (pack 5 (pack 5 (ruleThreshold 5)))
 
 kappaEx7Wf : Eq Bool (kappaWellFormed kappaEx7) true
 kappaEx7Wf = refl
@@ -889,7 +889,7 @@ quorumsMeet : (k : Kappa) → Bool
 quorumsMeet k = fold true (λ (a : FreeMon Address) (acc : Bool) → fold acc (λ (b : FreeMon Address) (acc2 : Bool) → flagIf (natLt (faultBound (kappaN k)) (meetSize a b)) acc2 false) (quorums (kappaMembers k) (kappaT k))) (quorums (kappaMembers k) (kappaT k))
 
 kappaT2 : Kappa
-kappaT2 = pack members4 (pack 2 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 2 c)))
+kappaT2 = pack members4 (pack 2 (pack 4 (ruleThreshold 2)))
 
 kappaT2W1 : Eq Bool (kappaW1 kappaT2) false
 kappaT2W1 = refl

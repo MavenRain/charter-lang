@@ -8,7 +8,7 @@
 
 /* Lowers each entry of the checked program M (a PROGRAM definition where
    entry_of holds) into PROG. Returns 1, or 0 after a diagnostic. */
-int lower_program(Machine *m, IrProgram *prog);
+int lower_program(Machine *m, IrProgram *prog, int words);
 /* Writes PROG as text: a `func` line for each entry, then one statement on
    each line. */
 void ir_print(const IrProgram *prog, FILE *out);

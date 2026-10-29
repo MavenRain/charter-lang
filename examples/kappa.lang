@@ -9,14 +9,14 @@ members7 : FreeMon Address
 members7 = fmCons Address (address 1) (fmCons Address (address 2) (fmCons Address (address 3) (fmCons Address (address 4) (fmCons Address (address 5) (fmCons Address (address 6) (fmCons Address (address 7) (fmNil Address)))))))
 
 kappaEx4 : Kappa
-kappaEx4 = pack members4 (pack 3 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 3 c)))
+kappaEx4 = pack members4 (pack 3 (pack 4 (ruleThreshold 3)))
 
 kappaEx7 : Kappa
-kappaEx7 = pack members7 (pack 5 (pack 5 (λ (c : Tally 7) → thetaThreshold 7 5 c)))
+kappaEx7 = pack members7 (pack 5 (pack 5 (ruleThreshold 5)))
 
 -- A kappa with t = 2 on n = 4: W1 fails.
 kappaBad : Kappa
-kappaBad = pack members4 (pack 2 (pack 4 (λ (c : Tally 4) → thetaThreshold 4 2 c)))
+kappaBad = pack members4 (pack 2 (pack 4 (ruleThreshold 2)))
 
 -- Elements of K_wf: the check reduces to true, so refl is the proof.
 kappaWfEx4 : KappaWf

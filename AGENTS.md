@@ -7,7 +7,7 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S2d)
+## Status (S3)
 
 Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
 the leaf-lang surface; `langc fmt` with one canonical form per operation;
@@ -34,9 +34,14 @@ S2d: in `examples/escrow.lang`, the Prop 3.3 tests on a view with `pos`
 erased (D73) and the Prop 3.4 quorum law points (178 of 178 laws); the
 open items O-off-1 to O-off-8 ruled (`docs/PLAN.md` section 10); `SPEC.md`
 sections 1, 3, 4, 7 and 8 filled.
+S3: the Wasm for the clear meaning; theta as the data type `Rule`
+(Q-S3-1); each run-path `ind` lowered as its paramorphism; a word-stream
+codec for each domain type with a stream form, and the stream entries of
+`--words` (`SPEC.md` section 7); `langc eval --words`; the node entry
+points in `examples/node.lang` and the client entry points in
+`examples/client.lang`.
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
-- the Wasm for the clear meaning, with the client and node entry points (S3).
 - the honest-signer part of Prop 3.4 (S8).
 - the general proofs of Invariant I and Conservation (open).
 - `skills/charter-lang/SKILL.md` with 3 to 5 graded examples (S9).

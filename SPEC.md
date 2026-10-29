@@ -316,7 +316,7 @@ IR entry is an `i64` export (`design/DESIGN.md` 3.2). TinyCC has no Wasm
 back end, thus `build/langc` writes each byte. The gate runs `wasm-validate`
 on each module and a differential against `langc eval` (`test/gate.sh`).
 At S2d the module comes from the kit IR, with the ops ADD, SUB, MUL, EQ,
-LE, ADD_CARRY, MUL_CARRY and OR. S3 writes the Wasm for the clear meaning
+LE, ADD_CARRY, MUL_CARRY and OR. S3 adds the stream entries for the clear meaning
 of the domain, with the client and node entry points. The FHE circuit IR
 (S5) and the ZK circuit IR (S7) are planned (`docs/PLAN.md` 5.2 and 5.3).
 
@@ -326,7 +326,44 @@ An instance is a top-level definition whose type is a data type (F14).
 |---|---|
 | `ℕ` | an `i64`. Wasm `i64` arithmetic wraps mod 2^64, thus `A = ℕ` has a 64-bit bound at the target points (Q8) |
 | `Proof P`, `Sig_e m` | erased: the meaning is a `Trunc` (`docs/PLAN.md` 4.1, L490) |
-| the other domain types | S3 sets the encoding |
+| `Bool` | an `i64`, 0 or 1. In a word stream: one word |
+| a data value (`DecE`, `BallotA`, `DecA`, `Bit`, `Address`, `Receipt M`, `Rule`, `Vote`, `Op M`) | in a word stream: the constructor index (from 0, in declaration order), then each field in declaration order. A family with one constructor keeps its tag word 0. Examples: `decHold` is `2`, `address 5` is `0 5`, `receipt 5 40` is `0 5 40` |
+| `FreeMon A` | the data rule (Q-S3-6): `fmNil` is `0`; `fmCons` is `1`, the head, then the tail. The list `[x1, x2]` is `1 x1 1 x2 0` |
+| `Option A` | `0` for `none`; `1`, then the value, for `some` |
+| a Sigma or a record (`Voucher M`, `Claim M`, `Kappa`, `Motion`, `St M`) | each component in order, with no tag. `Voucher M` is 4 words and `Claim M` is 5 words |
+| an `Eq ℕ` component | no word (erased). The decoder checks the equation. `Tally n` is 4 words (the counts of Release, Refund, Hold and bot), and their sum must be `n` |
+| `cmCarrier M` | one word. Each entry sets `M = natCMon` (Q8), thus a stream has no type argument |
+| `T M Z` | `0` for a stop; `1`, the `Z`, then the voucher list for a result |
+| `Kappa` | the member list, `thr`, `thrA`, then the `Rule` (Q-S3-1). `ruleThreshold t` is `0 t`. The `t` of the rule is not tied to `thr`: `kappaWellFormed` checks the key order, W1 and W2 only |
+| a function, a type, a universe (`CMon`), an `Eq` over a type that is not `ℕ` | no stream form. A def with such a parameter or result is not an entry |
+
+A scalar entry has `ℕ` or `Bool` for each parameter and for the result. It
+is an `i64` export with `i64` parameters. With the flag `--words`
+(Q-S3-10), `langc ir`, `abi` and `build` also make each program def with a
+stream form a stream entry (Q-S3-7). A stream entry has the Wasm type
+`(n : i64) -> i64`, and the module exports its memory as `memory`
+(Q-S3-11). The host writes the input stream (the stream of each parameter,
+in order) from byte 0, and calls the entry with the word count `n`. The
+heap starts at byte `8n`. The entry decodes the input, runs the body and
+encodes the result at the end of the heap: the first word is the count
+`m`, then the `m` words follow. The entry returns the byte address of the
+output. The codec of a recursive family uses a stack on the heap
+(Q-S3-12).
+
+The input count must fit in the current memory before it is scaled by 8;
+an oversized count traps. Each result component is strict, including an
+erased `Eq ℕ` proof: overflow while computing the proof traps. In a module
+with a stream entry, `memory` is reserved for the memory export. `build`
+refuses a program entry with that name with `REFUSE_EXPORT`.
+
+A bad stream traps (Q-S3-8). These streams are bad: a tag word that is not
+a constructor index of its family, a short stream, a word left over, and a
+false `Eq ℕ` component. `langc eval --words FILE NAME WORDS` is the
+reference: it prints the output words on one line, or `trap`.
+`examples/node.lang` has the node entry points (`nodeInit`, `nodeStep`,
+`nodeFold`). `examples/client.lang` has the client entry points (the 10
+run functions at `natCMon` and `clientVerdict`). The gate compares `langc
+eval --words` and Wasm on each row of `test/eval/stream.txt`.
 
 ## 8. Host and target
 

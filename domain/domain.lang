@@ -156,10 +156,20 @@ tallyBot n c = witness (payload (payload (payload c)))
 tallySum : (n : ℕ) → (c : Tally n) → Eq ℕ (natAdd (natAdd (natAdd (tallyRelease n c) (tallyRefund n c)) (tallyHold n c)) (tallyBot n c)) n
 tallySum n c = payload (payload (payload (payload c)))
 
--- The threshold rule theta_t (Ex 2.5): Release if c(Release) >= t, Refund
--- if c(Refund) >= t, else Hold.
+-- theta as data (Q-S3-1 (a)): a Rule names a decision rule, and ruleApply
+-- gives its function on a Tally n. The first rule is the threshold rule
+-- theta_t of Ex 2.5: Release if c(Release) >= t, Refund if c(Refund) >= t,
+-- else Hold.
+data Rule : Type where
+  ruleThreshold : (ruleThresholdT : ℕ) → Rule
+
+ruleApply : (r : Rule) → (n : ℕ) → (c : Tally n) → DecE
+ruleApply r n c = fold (λ (t : ℕ) → flagIf (natLe t (tallyRelease n c)) decRelease (flagIf (natLe t (tallyRefund n c)) decRefund decHold)) r
+
+-- The threshold rule theta_t (Ex 2.5) as a function: ruleThreshold t under
+-- ruleApply.
 thetaThreshold : (n : ℕ) → (t : ℕ) → (c : Tally n) → DecE
-thetaThreshold n t c = flagIf (natLe t (tallyRelease n c)) decRelease (flagIf (natLe t (tallyRefund n c)) decRefund decHold)
+thetaThreshold n t c = ruleApply (ruleThreshold t) n c
 
 -- Ready_t(X) if and only if n - tau(X)(bot) >= t (Def 2.3).
 tallyReady : (n : ℕ) → (t : ℕ) → (c : Tally n) → Bool
@@ -167,10 +177,10 @@ tallyReady n t c = natLe t (natSub n (tallyBot n c))
 
 -- The constitution kappa = (M, t, tA, theta) (Def 2.1, L234). The member
 -- set M is a FreeMon Address with strictly ascending keys (D40), and n is
--- its length. theta takes a Tally n, so F = theta o tau is constant on
--- orbits (W3 by construction, Q7).
+-- its length. theta is a Rule (Q-S3-1 (a)), and ruleApply takes a Tally n,
+-- so F = theta o tau is constant on orbits (W3 by construction, Q7).
 Kappa : Type 0
-Kappa = (members : FreeMon Address) × (thr : ℕ) × (thrA : ℕ) × ((c : Tally (fmLength Address members)) → DecE)
+Kappa = (members : FreeMon Address) × (thr : ℕ) × (thrA : ℕ) × Rule
 
 kappaMembers : (k : Kappa) → FreeMon Address
 kappaMembers k = witness k
@@ -184,13 +194,16 @@ kappaT k = witness (payload k)
 kappaTA : (k : Kappa) → ℕ
 kappaTA k = witness (payload (payload k))
 
-kappaTheta : (k : Kappa) → (c : Tally (kappaN k)) → DecE
-kappaTheta k c = payload (payload (payload k)) c
+kappaRule : (k : Kappa) → Rule
+kappaRule k = payload (payload (payload k))
 
--- The keys of xs ascend strictly, so M is a set (D40). The optional
--- previous key allows a first key of 0 without computing any successor.
+kappaTheta : (k : Kappa) → (c : Tally (kappaN k)) → DecE
+kappaTheta k c = ruleApply (kappaRule k) (kappaN k) c
+
+-- The keys of xs ascend strictly, so M is a set (D40). A right pass keeps
+-- the key of the next member (none at the end), so it adds no successor.
 kappaAscending : (xs : FreeMon Address) → Bool
-kappaAscending xs = ind (λ (x : FreeMon Address) → (lo : Option ℕ) → Bool) (λ (lo : Option ℕ) → true) (λ (h : Address) (t : FreeMon Address) (r : (lo : Option ℕ) → Bool) (lo : Option ℕ) → flagIf (option true (λ (p : ℕ) → natLt p (addressKey h)) lo) (r (some (addressKey h))) false) xs none
+kappaAscending xs = witness (ind (λ (x : FreeMon Address) → (ok : Bool) × Option ℕ) (pack true none) (λ (h : Address) (t : FreeMon Address) (acc : (ok : Bool) × Option ℕ) → pack (flagIf (witness acc) (option true (λ (p : ℕ) → natLt (addressKey h) p) (payload acc)) false) (some (addressKey h))) xs)
 
 -- W1: n + f(n) < 2t and t <= n - f(n). W2: t <= tA <= n (Def 2.4).
 kappaW1Of : (n : ℕ) → (t : ℕ) → Bool
@@ -206,7 +219,7 @@ kappaW2 : (k : Kappa) → Bool
 kappaW2 k = kappaW2Of (kappaN k) (kappaT k) (kappaTA k)
 
 -- kappa is well formed if its keys ascend and W1 and W2 hold. W3 holds by
--- the type of theta.
+-- the type of ruleApply.
 kappaWellFormed : (k : Kappa) → Bool
 kappaWellFormed k = flagIf (kappaAscending (kappaMembers k)) (flagIf (kappaW1 k) (kappaW2 k) false) false
 
@@ -501,10 +514,16 @@ stInit M k = stMk M k 0 0 (fmNil (ℕ × cmCarrier M)) (fmNil (ℕ × cmCarrier 
 memberIndex : (xs : FreeMon Address) → (m : Address) → Option ℕ
 memberIndex xs m = ind (λ (x : FreeMon Address) → Option ℕ) none (λ (h : Address) (t : FreeMon Address) (ih : Option ℕ) → flagIf (natEq (addressKey h) (addressKey m)) (some 0) (option none (λ (i : ℕ) → some (natAdd i 1)) ih)) xs
 
+-- fmSetLen V v i n xs puts v at the position i of xs, when n is the length
+-- of xs. A right pass counts k, the members after the member h, so h is at
+-- the position i when natSub n (k + 1) = i. k + 1 <= n, so no underflow.
+fmSetLen : (V : Type 0) → (v : V) → (i : ℕ) → (n : ℕ) → (xs : FreeMon V) → FreeMon V
+fmSetLen V v i n xs = payload (ind (λ (x : FreeMon V) → (k : ℕ) × FreeMon V) (pack 0 (fmNil V)) (λ (h : V) (t : FreeMon V) (acc : (k : ℕ) × FreeMon V) → pack (natAdd (witness acc) 1) (fmCons V (flagIf (natEq (natSub n (natAdd (witness acc) 1)) i) v h) (payload acc))) xs)
+
 -- fmSetAt V xs v i puts v at the position i of xs. A position after the
 -- end leaves xs unchanged. The length of xs does not change.
 fmSetAt : (V : Type 0) → (xs : FreeMon V) → (v : V) → (i : ℕ) → FreeMon V
-fmSetAt V xs v = ind (λ (x : FreeMon V) → (i : ℕ) → FreeMon V) (λ (i : ℕ) → fmNil V) (λ (h : V) (t : FreeMon V) (ih : (i : ℕ) → FreeMon V) (i : ℕ) → flagIf (natEq i 0) (fmCons V v t) (fmCons V h (ih (natSub i 1)))) xs
+fmSetAt V xs v i = fmSetLen V v i (fmLength V xs) xs
 
 -- spentAdd s k puts the key k in the spent set s. The keys ascend, so the
 -- order of the puts does not change the list.
@@ -559,10 +578,27 @@ runAmend M s = tRet M (St M) s
 runPropose : (M : CMon) → (s : St M) → T M (St M)
 runPropose M s = tRet M (St M) s
 
--- A decision for a = b on ℕ: ind on a with a Pi motive over b, then ind
--- on b. settle uses it for the length proof of kappaF.
+-- predEq z gives j with j + 1 = z, or none when z is 0.
+predEq : (z : ℕ) → Option ((j : ℕ) × Eq ℕ (natAdd j 1) z)
+predEq z = ind (λ (x : ℕ) → Option ((j : ℕ) × Eq ℕ (natAdd j 1) x)) none (λ (j : ℕ) (r : Option ((i : ℕ) × Eq ℕ (natAdd i 1) j)) → some (pack j refl)) z
+
+-- zeroEq z gives a proof of 0 = z, or none when z is not 0.
+zeroEq : (z : ℕ) → Option (Eq ℕ 0 z)
+zeroEq z = ind (λ (x : ℕ) → Option (Eq ℕ 0 x)) (some refl) (λ (j : ℕ) (r : Option (Eq ℕ 0 j)) → none) z
+
+-- natSpan b a gives d with d + a = b, or none when a > b. A counter pass
+-- over a: each step takes the predecessor of d (predEq).
+natSpan : (b : ℕ) → (a : ℕ) → Option ((d : ℕ) × Eq ℕ (natAdd d a) b)
+natSpan b a = ind (λ (x : ℕ) → Option ((d : ℕ) × Eq ℕ (natAdd d x) b)) (some (pack b refl)) (λ (i : ℕ) (ih : Option ((d : ℕ) × Eq ℕ (natAdd d i) b)) → option none (λ (p : (d : ℕ) × Eq ℕ (natAdd d i) b) → option none (λ (q : (j : ℕ) × Eq ℕ (natAdd j 1) (witness p)) → some (pack (witness q) (trans (symm (natAddOneL (witness q) i)) (trans (cong (λ (w : ℕ) → natAdd w i) (payload q)) (payload p))))) (predEq (witness p))) ih) a
+
+-- natAdd 0 a = a, by ind on a. natAdd b 0 = b is definitional.
+natAddZeroL : (a : ℕ) → Eq ℕ (natAdd 0 a) a
+natAddZeroL a = ind (λ (m : ℕ) → Eq ℕ (natAdd 0 m) m) refl (λ (m : ℕ) (ih : Eq ℕ (natAdd 0 m) m) → cong (λ (x : ℕ) → natAdd x 1) ih) a
+
+-- A decision for a = b on ℕ: natSpan gives d with d + a = b, then zeroEq
+-- tests d = 0. settle uses it for the length proof of kappaF.
 natEqDec : (a : ℕ) → (b : ℕ) → Option (Eq ℕ a b)
-natEqDec a b = ind (λ (x : ℕ) → (y : ℕ) → Option (Eq ℕ x y)) (λ (y : ℕ) → ind (λ (z : ℕ) → Option (Eq ℕ 0 z)) (some refl) (λ (j : ℕ) (r : Option (Eq ℕ 0 j)) → none) y) (λ (i : ℕ) (ih : (y : ℕ) → Option (Eq ℕ i y)) (y : ℕ) → ind (λ (z : ℕ) → Option (Eq ℕ (natAdd i 1) z)) none (λ (j : ℕ) (r : Option (Eq ℕ (natAdd i 1) j)) → option none (λ (e : Eq ℕ i j) → some (cong (λ (w : ℕ) → natAdd w 1) e)) (ih j)) y) a b
+natEqDec a b = option none (λ (p : (d : ℕ) × Eq ℕ (natAdd d a) b) → option none (λ (r : Eq ℕ 0 (witness p)) → some (trans (symm (natAddZeroL a)) (trans (cong (λ (w : ℕ) → natAdd w a) r) (payload p)))) (zeroEq (witness p))) (natSpan b a)
 
 -- Setters of St M: the ledger and the credit, and the close of claim c
 -- (the claim and its Gamma_E entry leave their maps, D54).

@@ -1,0 +1,25 @@
+-- The stream entries of test/eval/words.txt (`langc eval --words`, Q-S3-7):
+-- a family, a Sigma, an Option, a FreeMon and a Tally n parameter.
+wKey : (a : Address) → ℕ
+wKey a = addressKey a
+
+wThr : (k : Kappa) → ℕ
+wThr k = witness (payload k)
+
+wSize : (k : Kappa) → ℕ
+wSize k = kappaN k
+
+wOpt : (o : Option ℕ) → ℕ
+wOpt o = option 0 (λ (x : ℕ) → x) o
+
+wSame : (l : FreeMon ℕ) → FreeMon ℕ
+wSame l = l
+
+wPair : (n : ℕ) → FreeMon ℕ
+wPair n = fmCons ℕ n (fmCons ℕ (natAdd n 1) (fmNil ℕ))
+
+wDecide : (n : ℕ) → (c : Tally n) → DecE
+wDecide n c = ruleApply (ruleThreshold 2) n c
+
+wTree : (t : Tree) → Tree
+wTree t = t

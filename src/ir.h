@@ -92,6 +92,7 @@ typedef struct {
   size_t param_count;
   IrScalar result;
   uint32_t local_count; /* includes the parameters */
+  int stream;           /* 0: the scalar ABI; 1: the stream ABI (Q-S3-7) */
   IrBlock body;
 } IrFunc;
 

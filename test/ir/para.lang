@@ -1,0 +1,19 @@
+-- The check accepts this program, and `langc ir` lowers each ind on a
+-- run-time value as its paramorphism: an ind on ℕ is a counter pass, an
+-- ind on Option or on a family without a recursive field is a case split,
+-- and an ind on a linear family is the spine walk of `fold`, with each raw
+-- field before the ih. The gate runs the differential on each entry.
+tri : (n : ℕ) → ℕ
+tri n = ind (λ (m : ℕ) → ℕ) 0 (λ (k : ℕ) (ih : ℕ) → natAdd ih k) n
+
+optPara : (n : ℕ) → ℕ
+optPara n = ind (λ (x : Option ℕ) → ℕ) 7 (λ (m : ℕ) → natAdd m m) (flagIf (natLe n 3) (some n) none)
+
+tailSum : (n : ℕ) → ℕ
+tailSum n = ind (λ (x : FreeMon ℕ) → ℕ) 0 (λ (h : ℕ) (t : FreeMon ℕ) (ih : ℕ) → natAdd (natAdd (fmLength ℕ t) ih) h) (flagIf (natLe n 2) (fmCons ℕ n (fmNil ℕ)) (fmCons ℕ n (fmCons ℕ 1 (fmCons ℕ 2 (fmNil ℕ)))))
+
+decCode : (n : ℕ) → ℕ
+decCode n = ind (λ (d : DecE) → ℕ) 4 5 6 (flagIf (natLe n 2) decRefund decHold)
+
+keyPara : (n : ℕ) → ℕ
+keyPara n = ind (λ (a : Address) → ℕ) (λ (k : ℕ) → natAdd k 1) (flagIf (natLe n 2) (address n) (address 5))

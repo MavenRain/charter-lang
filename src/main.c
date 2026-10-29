@@ -30,6 +30,7 @@ typedef struct {
   const char *out_path;
   int runtime;
   int json;
+  int words;
 } Options;
 
 static const struct {
@@ -47,9 +48,10 @@ static const struct {
 static int usage(FILE *err) {
   fputs("usage: langc check [--json] PROG\n"
         "       langc eval PROG NAME [ARGS...]\n"
-        "       langc ir PROG\n"
-        "       langc abi PROG\n"
-        "       langc build PROG -o OUT [--runtime]\n"
+        "       langc eval --words PROG NAME [WORDS...]\n"
+        "       langc ir [--words] PROG\n"
+        "       langc abi [--words] PROG\n"
+        "       langc build [--words] PROG -o OUT [--runtime]\n"
         "       langc fmt PROG\n", err);
   return 2;
 }
@@ -65,7 +67,7 @@ static int find_command(const char *word, Command *out) {
 }
 
 static int parse_build_options(int argc, char **argv, Options *opt, Diag *diag) {
-  for (int i = 3; i < argc; i++) {
+  for (int i = 3 + opt->words; i < argc; i++) {
     int is_out = strcmp(argv[i], "-o") == 0 && i + 1 < argc;
     int is_runtime = strcmp(argv[i], "--runtime") == 0;
     if (!is_out && !is_runtime) return diag_fail(diag, "USAGE", NULL, "unknown build argument '%s'", argv[i]);
@@ -82,19 +84,21 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
     return diag_fail(diag, "USAGE", NULL, "expected a command and a program path");
   }
   opt->json = opt->command == CMD_CHECK && strcmp(argv[2], "--json") == 0;
-  opt->prog_path = argv[2 + opt->json];
+  opt->words = opt->command != CMD_CHECK && opt->command != CMD_FMT && strcmp(argv[2], "--words") == 0;
+  if (argc < 3 + opt->words) return diag_fail(diag, "USAGE", NULL, "expected a command and a program path");
+  opt->prog_path = argv[2 + opt->json + opt->words];
   switch (opt->command) {
     case CMD_CHECK:
     case CMD_IR:
     case CMD_ABI:
     case CMD_FMT:
       if (opt->json && argc == 3) return diag_fail(diag, "USAGE", NULL, "check --json needs a program path");
-      return argc == 3 + opt->json ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
+      return argc == 3 + opt->json + opt->words ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
     case CMD_EVAL:
-      if (argc < 4) return diag_fail(diag, "USAGE", NULL, "eval needs a definition name");
-      opt->entry = argv[3];
-      opt->args = argv + 4;
-      opt->arg_count = argc - 4;
+      if (argc < 4 + opt->words) return diag_fail(diag, "USAGE", NULL, "eval needs a definition name");
+      opt->entry = argv[3 + opt->words];
+      opt->args = argv + 4 + opt->words;
+      opt->arg_count = argc - 4 - opt->words;
       return 1;
     case CMD_BUILD:
       return parse_build_options(argc, argv, opt, diag);
@@ -123,7 +127,7 @@ static int run_target(const Options *opt, Machine *machine, Diag *diag) {
   FILE *out;
   size_t i;
   int ok = 1;
-  if (!lower_program(machine, &prog)) return 1;
+  if (!lower_program(machine, &prog, opt->words)) return 1;
   switch (opt->command) {
     case CMD_IR:
       ir_print(&prog, stdout);
@@ -153,7 +157,7 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
   if (!check_program(arena, &front.decls, &machine, diag)) return 1;
   switch (opt->command) {
     case CMD_EVAL:
-      return eval_command(&machine, opt->entry, opt->args, opt->arg_count, stdout, stderr);
+      return (opt->words ? eval_words_command : eval_command)(&machine, opt->entry, opt->args, opt->arg_count, stdout, stderr);
     case CMD_CHECK: /* run_check does check */
     case CMD_IR:
     case CMD_ABI:

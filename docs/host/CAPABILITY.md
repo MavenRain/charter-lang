@@ -30,8 +30,12 @@ on 2026-10-08 on AArch64 Darwin.
   lazy: it stops a computation only when the computation needs it.
   `README.md` gives the rule and the reason.
 - There is no text type. The lexer refuses `"` (`test/parse/string.lang`).
-- On Wasm, each value is a word and a trap flag. Only the entry result
-  is strict.
+- A stream entry (`--words`, `SPEC.md` section 7) reads its input words
+  from the exported `memory` and writes its output words at the end of the
+  heap. A bad stream traps.
+- On Wasm, each value is a word and a trap flag. The scalar entry result
+  is strict. A stream entry is strict in every result component, including
+  an erased proof.
 
 ## Overflow tests on Wasm
 
@@ -71,7 +75,7 @@ on 2026-10-08 on AArch64 Darwin.
 
 ## Measured numbers
 
-- `make check` runs 813 differential cases on 13 modules, with
+- `make check` runs 1094 differential cases on 22 modules, with
   0 mismatches.
 - `langc build examples/entries.lang` writes a module of 1366 bytes for ten
   entries.
@@ -86,7 +90,7 @@ refuses them with a HOST-LIMIT code. These are not defects.
 - `REFUSE_RUNTIME_CLOSURE` (`src/front/lower.c:503`): a function value
   must exist at run time, for example as the result of a `fold`. The IR
   has no closures. `test/ir/closure.lang` is the gate case.
-- `REFUSE_RUNTIME_TREE` (`src/front/lower.c:990`): a `fold` walks a value
+- `REFUSE_RUNTIME_TREE` (`src/front/lower.c:1074`): a `fold` or an `ind` walks a value
   of a family with two or more recursive fields, and the value exists
   only at run time. A loop walks one spine. A tree needs recursion or an
   explicit stack. `test/ir/tree.lang` is the gate case.

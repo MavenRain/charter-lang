@@ -23,5 +23,14 @@ int entry_of(Machine *m, const Value *type, Entry *out);
 /* Evaluates the definition NAME on ARGS and prints the result. Returns 0, 1
    after a diagnostic, or 2 after an EVAL_ARGS diagnostic. */
 int eval_command(Machine *m, const char *name, char *const *args, int arg_count, FILE *out, FILE *err);
+/* Evaluates the stream entry NAME on the word stream ARGS and prints the
+   result stream (Q-S3-7). A bad stream prints `trap` (Q-S3-8). Returns 0, 1
+   after a diagnostic, or 2 after an EVAL_ARGS diagnostic. */
+int eval_words_command(Machine *m, const char *name, char *const *args, int arg_count, FILE *out, FILE *err);
+/* Returns 1 when TYPE is the type of a stream entry; *PARAMS = its parameter
+   count. Shared with the lowering (`--words`). */
+int words_entry(Machine *m, const Value *type, uint32_t *params);
+/* The environment of the N family parameters VALS: the last one is index 0. */
+const Env *words_env(Machine *m, const Value *const *vals, uint32_t n);
 
 #endif

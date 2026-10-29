@@ -67,12 +67,14 @@ reason. test/json/expect.txt holds the exact JSON lines of each fixture.
 | `TYPE_ARITY` | error | check | A term has the wrong number of arguments. | test/json/TYPE_ARITY.lang |
 | `TYPE_NOT_FUNCTION` | error | check | An application of a term that is not a function. | test/json/TYPE_NOT_FUNCTION.lang |
 | `W_NONCANON` | warning | check | The first declaration (or the tail of the file) whose text is not the `langc fmt` text. `found` is the input text; `expected` and `fix` are the canonical text. | test/json/W_NONCANON.lang |
+| `REFUSE_EXPORT` | error | Wasm | A program entry is named `memory` in a module with a stream entry. The name is reserved for the memory export. | no fixture: `langc build` has no JSON mode; test/checktool.c checks stream and scalar entry collisions and permits the name in a scalar-only module |
 | `REFUSE_RUNTIME_CLOSURE` | error | lowering | A function value must exist at run time. The Wasm target cannot hold one (HOST-LIMIT). | no fixture: `langc ir` and `langc build` have no JSON mode; test/gate.sh checks test/ir/closure.lang |
-| `REFUSE_RUNTIME_TREE` | error | lowering | A fold over a tree must run at run time. The Wasm target cannot run it (HOST-LIMIT). | no fixture: `langc ir` and `langc build` have no JSON mode; test/gate.sh checks test/ir/tree.lang |
+| `REFUSE_RUNTIME_TREE` | error | lowering | A fold or an ind over a tree must run at run time. The Wasm target cannot run it (HOST-LIMIT). | no fixture: `langc ir` and `langc build` have no JSON mode; test/gate.sh checks test/ir/tree.lang |
 | `EVAL_ARGS` | error | eval | The arguments of `langc eval` do not agree with the entry (count or range). | no fixture: `langc eval` has no JSON mode; test/gate.sh checks it (`eval_refused`) |
 | `EVAL_ENTRY` | error | eval | `langc eval` names no definition, or the entry does not compute a number. | no fixture: `langc eval` has no JSON mode; test/gate.sh checks it (`eval_refused`) |
 | `EVAL_PRINT` | error | eval | The value is too large to print. | no fixture: `langc eval` has no JSON mode; test/review.sh checks large.lang |
 | `EVAL_OVERFLOW` | error | eval | A ℕ operation overflows past 2^64-1. | no fixture: `langc eval` has no JSON mode; the `trap` lines of test/eval/expect.txt check it |
+| `EVAL_WORDS` | error | eval | A word stream of `langc eval --words` is bad: a bad tag, a short stream, a word left over, or a false Eq ℕ component (Q-S3-8). | no fixture: `langc eval` has no JSON mode; the `trap EVAL_WORDS` lines of test/eval/words.txt check it |
 | `EVAL_DEPTH` | error | eval, lowering | The evaluation or the lowering nests deeper than 2000 levels. | no fixture: no S1 `check` input reaches this limit, and `langc eval` has no JSON mode |
 | `EVAL_FUEL` | error | eval | The evaluation takes more than 20000000 steps. | no fixture: a fixture needs more than 20000000 steps, which is too slow for the gate |
 | `INTERNAL` | error | check, eval, lowering | An internal rule of `langc` fails. This is a defect in `langc`. | no fixture: no valid input reaches it |

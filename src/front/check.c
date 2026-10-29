@@ -1919,3 +1919,356 @@ int eval_command(Machine *m, const char *name, char *const *args, int arg_count,
     return strcmp(m->diag->code != NULL ? m->diag->code : "", "EVAL_ARGS") == 0 ? 2 : 1;
   return print_result(m, name, v, out, err);
 }
+
+/* The word streams of `langc eval --words` (Q-S3-7, Q-S3-8). A value of a
+   stream type is a sequence of u64 words: a Nat is one word, a Bool is 0 or
+   1, an Option is a tag (0 none, 1 some) then the value, a pair or a Sigma is
+   its components in order, an Eq Nat proof is no word, and a family value is
+   the constructor tag, then its fields. */
+#define WORDS_TYPE_DEPTH 64u
+#define WORDS_OUT_MAX (1u << 20)
+
+typedef struct {
+  const uint64_t *words;
+  uint32_t count;
+  uint32_t at;
+  const char *bad; /* the first bad-stream reason, or NULL */
+} WordStream;
+
+typedef struct {
+  uint64_t *words;
+  uint32_t count;
+  uint32_t cap;
+  int trap; /* 1 when a component of the result is an overflow */
+} WordOut;
+
+/* The environment of the family parameters: the last one is index 0. */
+const Env *words_env(Machine *m, const Value *const *vals, uint32_t n) {
+  const Env *e = NULL;
+  uint32_t i;
+  for (i = 0; i < n; i++)
+    e = env_push(m, e, vals[i]);
+  return e;
+}
+
+/* Returns 1 when each value of type T has a stream form. LEVEL is the next
+   free variable level. */
+static int words_type(Machine *m, uint32_t level, const Value *t, unsigned depth) {
+  const FamilyInfo *f;
+  const Env *env;
+  uint32_t i;
+  uint32_t j;
+  int ok = 1;
+  if (t == NULL || depth > WORDS_TYPE_DEPTH)
+    return 0;
+  switch (t->kind) {
+  case VAL_SIGMA:
+    return words_type(m, level, t->dom, depth + 1) &&
+           words_type(m, level + 1, closure_apply(m, t, val_var(m, level)), depth + 1);
+  case VAL_OP:
+    break;
+  case VAL_NAT:
+  case VAL_TRAP:
+  case VAL_UNIV:
+  case VAL_LAM:
+  case VAL_PI:
+  case VAL_VAR:
+  case VAL_APP:
+  case VAL_STUCK:
+    return 0;
+  }
+  if (val_is(t, OP_NAT) || val_is(t, OP_BOOL))
+    return 1;
+  if (val_is(t, OP_PROD))
+    return words_type(m, level, t->args[0], depth + 1) && words_type(m, level, t->args[1], depth + 1);
+  if (val_is(t, OP_OPTION))
+    return words_type(m, level, t->args[0], depth + 1);
+  if (val_is(t, OP_EQ))
+    return val_is(t->args[0], OP_NAT);
+  if (!val_is(t, OP_FAMILY))
+    return 0;
+  f = &m->families[t->inst];
+  env = words_env(m, t->args, f->param_count);
+  for (i = 0; i < f->ctor_count && ok; i++) {
+    const CtorInfo *k = &m->ctors[f->first_ctor + i];
+    for (j = 0; j < k->field_count && ok; j++)
+      ok = k->fields[j].recursive || words_type(m, level, eval_core(m, env, k->fields[j].type), depth + 1);
+  }
+  return ok;
+}
+
+/* Returns 1 when TYPE is the type of a stream entry: each parameter and the
+   result have a stream form. A scalar entry is a stream entry. */
+int words_entry(Machine *m, const Value *type, uint32_t *params) {
+  const Value *t = type;
+  uint32_t k = 0;
+  int ok = 1;
+  while (ok && t != NULL && t->kind == VAL_PI && k < ENTRY_PARAMS_MAX) {
+    ok = words_type(m, k, t->dom, 0);
+    t = closure_apply(m, t, val_var(m, k));
+    k++;
+  }
+  *params = k;
+  return ok && words_type(m, k, t, 0);
+}
+
+static const Value *words_bad(WordStream *s, const char *reason) {
+  s->bad = s->bad != NULL ? s->bad : reason;
+  return NULL;
+}
+
+static int words_next(WordStream *s, uint64_t *out) {
+  if (s->at >= s->count) {
+    words_bad(s, "a short stream");
+    return 0;
+  }
+  *out = s->words[s->at++];
+  return 1;
+}
+
+static const Value *words_none(Machine *m) {
+  diag_fail(m->diag, "EVAL_ENTRY", m->def, "a component type has no stream form");
+  return NULL;
+}
+
+/* An Eq Nat component has no word: the two sides must be the same number. An
+   overflowed side is VAL_TRAP, not VAL_NAT. */
+static const Value *words_eq(Machine *m, WordStream *s, const Value *t) {
+  const Value *x = t->args[1];
+  const Value *y = t->args[2];
+  int same = x->kind == VAL_NAT && y->kind == VAL_NAT && x->nat == y->nat;
+  return same ? val_make(m, OP_REFL, 0, 0, NULL, NULL, NULL) : words_bad(s, "a false Eq Nat component");
+}
+
+static const Value *words_decode(Machine *m, WordStream *s, const Value *t, unsigned depth);
+
+/* A family value: the constructor TAG, then each field at its type in the
+   environment of the family parameters. */
+static const Value *words_ctor(Machine *m, WordStream *s, const Value *t, uint64_t tag, unsigned depth) {
+  const FamilyInfo *f = &m->families[t->inst];
+  const CtorInfo *k;
+  const Env *env;
+  const Value **args;
+  uint32_t n;
+  uint32_t j;
+  int ok = 1;
+  if (tag >= f->ctor_count)
+    return words_bad(s, "a bad tag");
+  k = &m->ctors[f->first_ctor + (uint32_t)tag];
+  n = f->param_count + k->field_count;
+  args = arena_alloc(m->arena, ((size_t)n + 1u) * sizeof *args);
+  if (args == NULL)
+    return NULL;
+  env = words_env(m, t->args, f->param_count);
+  for (j = 0; j < f->param_count; j++)
+    args[j] = t->args[j];
+  for (j = 0; j < k->field_count && ok; j++) {
+    args[f->param_count + j] = words_decode(m, s, eval_core(m, env, k->fields[j].type), depth + 1);
+    ok = args[f->param_count + j] != NULL;
+  }
+  return ok ? val_op(m, VAL_OP, OP_CTOR, f->first_ctor + (uint32_t)tag, 0, args, n) : NULL;
+}
+
+/* Decodes one value of type T from S. NULL with s->bad set is a bad stream;
+   NULL with s->bad unset follows a diagnostic. */
+static const Value *words_decode(Machine *m, WordStream *s, const Value *t, unsigned depth) {
+  uint64_t w = 0;
+  const Value *x;
+  const Value *y;
+  if (t == NULL || s->bad != NULL)
+    return NULL;
+  if (depth > EVAL_DEPTH_LIMIT) {
+    diag_fail(m->diag, "EVAL_DEPTH", m->def, "the word stream nests deeper than %u values", EVAL_DEPTH_LIMIT);
+    return NULL;
+  }
+  switch (t->kind) {
+  case VAL_TRAP:
+    return words_bad(s, "a component type overflowed");
+  case VAL_SIGMA:
+    x = words_decode(m, s, t->dom, depth + 1);
+    y = x == NULL ? NULL : words_decode(m, s, closure_apply(m, t, x), depth + 1);
+    return y == NULL ? NULL : val_make(m, OP_PACK, 0, 2, x, y, NULL);
+  case VAL_OP:
+    break;
+  case VAL_NAT:
+  case VAL_UNIV:
+  case VAL_LAM:
+  case VAL_PI:
+  case VAL_VAR:
+  case VAL_APP:
+  case VAL_STUCK:
+    return words_none(m);
+  }
+  if (val_is(t, OP_EQ))
+    return words_eq(m, s, t);
+  if (val_is(t, OP_PROD)) {
+    x = words_decode(m, s, t->args[0], depth + 1);
+    y = x == NULL ? NULL : words_decode(m, s, t->args[1], depth + 1);
+    return y == NULL ? NULL : val_make(m, OP_PAIR, 0, 2, x, y, NULL);
+  }
+  if (!val_is(t, OP_NAT) && !val_is(t, OP_BOOL) && !val_is(t, OP_OPTION) && !val_is(t, OP_FAMILY))
+    return words_none(m);
+  if (!words_next(s, &w))
+    return NULL;
+  if (val_is(t, OP_NAT))
+    return val_nat(m, w);
+  if (w > 1u && !val_is(t, OP_FAMILY))
+    return words_bad(s, "a bad tag");
+  if (val_is(t, OP_BOOL))
+    return val_make(m, w == 1u ? OP_TRUE : OP_FALSE, 0, 0, NULL, NULL, NULL);
+  if (val_is(t, OP_OPTION) && w == 0u)
+    return val_make(m, OP_NONE, 0, 0, NULL, NULL, NULL);
+  if (val_is(t, OP_OPTION)) {
+    x = words_decode(m, s, t->args[0], depth + 1);
+    return x == NULL ? NULL : val_make(m, OP_SOME, 0, 1, x, NULL, NULL);
+  }
+  return words_ctor(m, s, t, w, depth);
+}
+
+static int words_mismatch(Machine *m) {
+  return diag_fail(m->diag, "EVAL_ENTRY", m->def, "the result does not match its type");
+}
+
+/* Appends the word W to O, in a growable arena buffer of at most
+   WORDS_OUT_MAX words. */
+static int words_put(Machine *m, WordOut *o, uint64_t w) {
+  uint64_t *grown;
+  if (o->count == WORDS_OUT_MAX)
+    return diag_fail(m->diag, "EVAL_PRINT", m->def, "the result stream exceeds %u words", WORDS_OUT_MAX);
+  if (o->count == o->cap) {
+    o->cap = o->cap == 0 ? 64u : o->cap * 2u;
+    grown = arena_alloc(m->arena, (size_t)o->cap * sizeof *grown);
+    if (grown == NULL)
+      return diag_fail(m->diag, "OOM", m->def, "out of memory");
+    if (o->count != 0)
+      memcpy(grown, o->words, (size_t)o->count * sizeof *grown);
+    o->words = grown;
+  }
+  o->words[o->count++] = w;
+  return 1;
+}
+
+static int words_encode(Machine *m, WordOut *o, const Value *t, const Value *v, unsigned depth);
+
+/* A family value: the constructor tag, then each field. */
+static int words_encode_ctor(Machine *m, WordOut *o, const Value *t, const Value *v, unsigned depth) {
+  const FamilyInfo *f = &m->families[t->inst];
+  const CtorInfo *k;
+  const Env *env;
+  uint32_t j;
+  int ok;
+  if (!val_is(v, OP_CTOR) || v->inst < f->first_ctor || v->inst - f->first_ctor >= f->ctor_count)
+    return words_mismatch(m);
+  k = &m->ctors[v->inst];
+  if (v->argc != f->param_count + k->field_count)
+    return words_mismatch(m);
+  env = words_env(m, t->args, f->param_count);
+  ok = words_put(m, o, v->inst - f->first_ctor);
+  for (j = 0; j < k->field_count && ok; j++)
+    ok = words_encode(m, o, eval_core(m, env, k->fields[j].type), v->args[f->param_count + j], depth + 1);
+  return ok;
+}
+
+/* Encodes the value V of type T into O. Each position is strict: an overflow
+   anywhere in V sets o->trap. Returns 1, or 0 after a trap or a diagnostic. */
+static int words_encode(Machine *m, WordOut *o, const Value *t, const Value *v, unsigned depth) {
+  if (t == NULL || v == NULL)
+    return 0;
+  if (v->kind == VAL_TRAP) {
+    o->trap = 1;
+    return 0;
+  }
+  if (depth > EVAL_DEPTH_LIMIT)
+    return diag_fail(m->diag, "EVAL_DEPTH", m->def, "the result nests deeper than %u values", EVAL_DEPTH_LIMIT);
+  if (t->kind == VAL_SIGMA)
+    return val_is(v, OP_PACK) ? words_encode(m, o, t->dom, v->args[0], depth + 1) &&
+                                    words_encode(m, o, closure_apply(m, t, v->args[0]), v->args[1], depth + 1)
+                              : words_mismatch(m);
+  if (val_is(t, OP_EQ))
+    return 1;
+  if (val_is(t, OP_NAT))
+    return v->kind == VAL_NAT ? words_put(m, o, v->nat) : words_mismatch(m);
+  if (val_is(t, OP_BOOL))
+    return val_is(v, OP_TRUE) || val_is(v, OP_FALSE) ? words_put(m, o, (uint64_t)val_is(v, OP_TRUE)) : words_mismatch(m);
+  if (val_is(t, OP_OPTION) && val_is(v, OP_NONE))
+    return words_put(m, o, 0u);
+  if (val_is(t, OP_OPTION))
+    return val_is(v, OP_SOME) ? words_put(m, o, 1u) && words_encode(m, o, t->args[0], v->args[0], depth + 1) : words_mismatch(m);
+  if (val_is(t, OP_PROD))
+    return val_is(v, OP_PAIR) ? words_encode(m, o, t->args[0], v->args[0], depth + 1) &&
+                                    words_encode(m, o, t->args[1], v->args[1], depth + 1)
+                              : words_mismatch(m);
+  if (val_is(t, OP_FAMILY))
+    return words_encode_ctor(m, o, t, v, depth);
+  return words_mismatch(m);
+}
+
+/* The status after a NULL value: the diagnostic is set, or memory ran out. */
+static int words_failed(Machine *m, const char *name) {
+  if (m->diag->code == NULL)
+    diag_fail(m->diag, "OOM", name, "out of memory");
+  return strcmp(m->diag->code != NULL ? m->diag->code : "", "EVAL_ARGS") == 0 ? 2 : 1;
+}
+
+int eval_words_command(Machine *m, const char *name, char *const *args, int arg_count, FILE *out, FILE *err) {
+  uint32_t d = find_def(m, name);
+  const Value *xs[ENTRY_PARAMS_MAX];
+  uint64_t *words;
+  WordStream s;
+  WordOut o;
+  const Value *t;
+  const Value *v;
+  uint32_t params = 0;
+  uint32_t i;
+  int ok;
+  runtime_begin(m);
+  m->def = name;
+  if (d == NO_DEF)
+    return diag_fail(m->diag, "EVAL_ENTRY", name, "no definition has this name") + 1;
+  if (!words_entry(m, m->defs[d].type, &params))
+    return diag_fail(m->diag, "EVAL_ENTRY", name,
+                     "the definition is not a stream entry: a parameter or the result has no stream form") + 1;
+  words = arena_alloc(m->arena, ((size_t)arg_count + 1u) * sizeof *words);
+  if (words == NULL)
+    return diag_fail(m->diag, "OOM", name, "out of memory") + 1;
+  for (i = 0; i < (uint32_t)arg_count; i++)
+    if (!parse_u64(args[i], &words[i]))
+      return diag_fail(m->diag, "EVAL_ARGS", name, "'%s' is not a word (0 to 2^64-1)", args[i]) + 2;
+  memset(&s, 0, sizeof s);
+  s.words = words;
+  s.count = (uint32_t)arg_count;
+  /* The decode runs first, then the body, as in the IR. The type of
+     parameter i + 1 is the Pi at the decoded parameter i. */
+  t = m->defs[d].type;
+  for (i = 0; i < params && t != NULL && s.bad == NULL; i++) {
+    xs[i] = words_decode(m, &s, t->dom, 0);
+    t = xs[i] == NULL ? NULL : closure_apply(m, t, xs[i]);
+  }
+  if (s.bad == NULL && t != NULL && s.at != s.count)
+    words_bad(&s, "a word left over");
+  if (s.bad != NULL) {
+    fputs("trap\n", out);
+    fprintf(err, "langc: EVAL_WORDS: %s: %s\n", name, s.bad);
+    return 0;
+  }
+  if (t == NULL)
+    return words_failed(m, name);
+  v = def_value(m, d);
+  for (i = 0; i < params && v != NULL; i++)
+    v = apply_value(m, v, xs[i]);
+  if (v == NULL)
+    return words_failed(m, name);
+  memset(&o, 0, sizeof o);
+  ok = words_encode(m, &o, t, v, 0);
+  if (o.trap) {
+    fputs("trap\n", out);
+    fprintf(err, "langc: EVAL_OVERFLOW: %s: a Nat operation overflowed past 2^64-1\n", name);
+    return 0;
+  }
+  if (!ok)
+    return words_failed(m, name);
+  for (i = 0; i < o.count; i++)
+    fprintf(out, "%s%llu", i == 0 ? "" : " ", (unsigned long long)o.words[i]);
+  fputc('\n', out);
+  return 0;
+}
