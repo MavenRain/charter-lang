@@ -7,7 +7,7 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S3)
+## Status (S4)
 
 Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
 the leaf-lang surface; `langc fmt` with one canonical form per operation;
@@ -40,6 +40,14 @@ codec for each domain type with a stream form, and the stream entries of
 `--words` (`SPEC.md` section 7); `langc eval --words`; the node entry
 points in `examples/node.lang` and the client entry points in
 `examples/client.lang`.
+S4: the core types `Digest`, `Key`, `VKey` and `Sig`; `hashOf tag T x`,
+the Poseidon2 hash (BN254, t = 3, Q-C4) of the word stream of `x : T`
+with a domain tag 1 to 5 (Q-S4-1, Q-S4-2); `merkleRoot` (fixed depth 16,
+Q-S4-3); `Entry` and the hash chain step `chainStep` in
+`domain/domain.lang` (Q-S4-9, Q-S4-16); `frostVerify vk T msg sig`, the
+FROST(Ed25519, SHA-512) verify with the cofactored check (Q-C1, Q-S4-12,
+Q-S4-14; verify only, Q-S4-4); a C meaning for each, and the Wasm kernels
+of `langc build` (Q-C6).
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
 - the honest-signer part of Prop 3.4 (S8).

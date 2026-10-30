@@ -4,6 +4,8 @@
    hint) or its type is inferred. Two types are equal when their normal forms
    are equal (front/eval.c). The checker writes core terms (front/core.h). */
 #include "front/check.h"
+#include "front/ed25519.h"
+#include "front/poseidon2.h"
 
 #include <string.h>
 
@@ -68,7 +70,10 @@ typedef enum {
   RULE_CONG,
   RULE_TRANSPORT,
   RULE_NAT2,
-  RULE_FLAG_IF
+  RULE_FLAG_IF,
+  RULE_HASH,
+  RULE_MERKLE,
+  RULE_FROST
 } Rule;
 
 typedef struct {
@@ -84,6 +89,10 @@ static const Builtin BUILTINS[] = {
   {"Nat", 0, RULE_TYPE0, OP_NAT, OP_NAT, 0},
   {"Bool", 0, RULE_TYPE0, OP_BOOL, OP_NAT, 0},
   {"Unit", 0, RULE_TYPE0, OP_UNIT, OP_NAT, 0},
+  {"Digest", 0, RULE_TYPE0, OP_DIGEST, OP_NAT, 0},
+  {"Key", 0, RULE_TYPE0, OP_KEY, OP_NAT, 0},
+  {"VKey", 0, RULE_TYPE0, OP_VKEY, OP_NAT, 0},
+  {"Sig", 0, RULE_TYPE0, OP_SIG, OP_NAT, 0},
   {"Sum", 2, RULE_TYPE2, OP_SUM, OP_NAT, 0},
   {"Option", 1, RULE_TYPE1, OP_OPTION, OP_NAT, 0},
   {"Eq", 3, RULE_EQ, OP_EQ, OP_NAT, 0},
@@ -114,7 +123,10 @@ static const Builtin BUILTINS[] = {
   {"natMul", 2, RULE_NAT2, OP_NAT_MUL, OP_NAT, 0},
   {"natEq", 2, RULE_NAT2, OP_NAT_EQ, OP_BOOL, 0},
   {"natLe", 2, RULE_NAT2, OP_NAT_LE, OP_BOOL, 0},
-  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_BOOL, 0}
+  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_BOOL, 0},
+  {"hashOf", 3, RULE_HASH, OP_HASH, OP_DIGEST, 0},
+  {"merkleRoot", 1, RULE_MERKLE, OP_MERKLE, OP_DIGEST, 0},
+  {"frostVerify", 4, RULE_FROST, OP_FROST, OP_BOOL, 0}
 };
 
 #define BUILTIN_COUNT ((uint32_t)(sizeof BUILTINS / sizeof BUILTINS[0]))
@@ -1039,6 +1051,72 @@ static const Core *rule_flag_if(Call *k) {
   return op3(c, OP_FLAG_IF, 0, 3, b, yes, no);
 }
 
+static int words_type(Machine *m, uint32_t level, const Value *t, unsigned depth);
+
+/* hashOf tag T x (Q-S4-7): TAG a closed Nat 1 to 5 (the domain tag), T a type
+   with a stream form, x : T. The result is a Digest. */
+static const Core *rule_hash(Call *k) {
+  Checker *c = k->c;
+  uint64_t level = 0;
+  const Core *tag = check(c, k->args[0], nat_type(c));
+  const Value *tv = here(c, tag);
+  const Core *t;
+  const Value *ty;
+  if (tag != NULL && (tv == NULL || tv->kind != VAL_NAT || tv->nat < 1u || tv->nat > 5u)) {
+    diag_fail(c->m->diag, "TYPE_HASH_TAG", c->m->def, "hashOf takes a literal tag 1 to 5");
+    return NULL;
+  }
+  t = tag == NULL ? NULL : check_type(c, k->args[1], &level);
+  ty = here(c, t);
+  if (t != NULL && !words_type(c->m, c->level, ty, 0u)) {
+    diag_fail(c->m->diag, "TYPE_HASH", c->m->def, "hashOf takes a type with a stream form");
+    return NULL;
+  }
+  k->type = tyop(c, k->b->result, 0, NULL, NULL, NULL);
+  return op3(c, OP_HASH, 0, 3, tag, t, t == NULL ? NULL : check(c, k->args[2], ty));
+}
+
+/* merkleRoot xs (Q-S4-6): xs : FreeMon Digest. The family FreeMon of
+   domain/domain.lang is found by its name, as in find_known. The result is a
+   Digest. */
+static const Core *rule_merkle(Call *k) {
+  Checker *c = k->c;
+  const Value *digest = tyop(c, OP_DIGEST, 0, NULL, NULL, NULL);
+  const Value *list = NULL;
+  const Core *x;
+  uint32_t i;
+  for (i = 0; i < c->m->family_count && list == NULL; i++)
+    if (strcmp(c->m->families[i].name, "FreeMon") == 0 && c->m->families[i].param_count == 1u)
+      list = val_op(c->m, VAL_OP, OP_FAMILY, i, 0, &digest, 1);
+  if (list == NULL) {
+    diag_fail(c->m->diag, "TYPE_MERKLE", c->m->def, "merkleRoot needs the family FreeMon of domain/domain.lang");
+    return NULL;
+  }
+  x = check(c, k->args[0], list);
+  k->type = digest;
+  return x == NULL ? NULL : core_op(c, OP_MERKLE, 0, 0, &x, 1);
+}
+
+/* frostVerify vk T msg sig (Q-S4-4, Q-S4-12 (a)): vk : VKey, T a type with a
+   stream form, msg : T, sig : Sig. The result is a Bool. */
+static const Core *rule_frost(Call *k) {
+  Checker *c = k->c;
+  uint64_t level = 0;
+  const Core *parts[4];
+  const Value *ty;
+  parts[0] = check(c, k->args[0], tyop(c, OP_VKEY, 0, NULL, NULL, NULL));
+  parts[1] = parts[0] == NULL ? NULL : check_type(c, k->args[1], &level);
+  ty = here(c, parts[1]);
+  if (parts[1] != NULL && !words_type(c->m, c->level, ty, 0u)) {
+    diag_fail(c->m->diag, "TYPE_FROST", c->m->def, "frostVerify takes a message type with a stream form");
+    return NULL;
+  }
+  parts[2] = parts[1] == NULL ? NULL : check(c, k->args[2], ty);
+  parts[3] = parts[2] == NULL ? NULL : check(c, k->args[3], tyop(c, OP_SIG, 0, NULL, NULL, NULL));
+  k->type = tyop(c, k->b->result, 0, NULL, NULL, NULL);
+  return parts[3] == NULL ? NULL : core_op(c, OP_FROST, 0, 0, parts, 4);
+}
+
 static const Core *rule(Call *k) {
   switch (k->b->rule) {
   case RULE_TYPE0:
@@ -1101,6 +1179,12 @@ static const Core *rule(Call *k) {
     return rule_nat2(k);
   case RULE_FLAG_IF:
     return rule_flag_if(k);
+  case RULE_HASH:
+    return rule_hash(k);
+  case RULE_MERKLE:
+    return rule_merkle(k);
+  case RULE_FROST:
+    return rule_frost(k);
   }
   return NULL;
 }
@@ -1977,7 +2061,8 @@ static int words_type(Machine *m, uint32_t level, const Value *t, unsigned depth
   case VAL_STUCK:
     return 0;
   }
-  if (val_is(t, OP_NAT) || val_is(t, OP_BOOL))
+  if (val_is(t, OP_NAT) || val_is(t, OP_BOOL) || val_is(t, OP_DIGEST) || val_is(t, OP_KEY) || val_is(t, OP_VKEY) ||
+      val_is(t, OP_SIG))
     return 1;
   if (val_is(t, OP_PROD))
     return words_type(m, level, t->args[0], depth + 1) && words_type(m, level, t->args[1], depth + 1);
@@ -2041,6 +2126,38 @@ static const Value *words_eq(Machine *m, WordStream *s, const Value *t) {
 }
 
 static const Value *words_decode(Machine *m, WordStream *s, const Value *t, unsigned depth);
+
+/* Reads the 4 words of a Digest or a Key, low word first, into an Fr value of
+   4 Nat limbs. Refuses a value at or above r. */
+static const Value *words_fr(Machine *m, WordStream *s) {
+  uint64_t w[FR_WORDS];
+  const Value *limbs[FR_WORDS];
+  Fr x;
+  unsigned i;
+  for (i = 0; i < FR_WORDS; i++)
+    if (!words_next(s, &w[i]))
+      return NULL;
+  if (!fr_from_words(&x, w))
+    return words_bad(s, "a value at or above r");
+  for (i = 0; i < FR_WORDS; i++)
+    limbs[i] = val_nat(m, w[i]);
+  return val_op(m, VAL_OP, OP_FR, 0, 0, limbs, FR_WORDS);
+}
+
+/* Reads the N words of a VKey or a Sig (the bytes, 8 per word, little
+   endian, low word first) into an OP value of N Nat words. Each word is in
+   range: the verify decodes the bytes. */
+static const Value *words_raw(Machine *m, WordStream *s, Op op, unsigned n) {
+  uint64_t w;
+  const Value *limbs[SIG_WORDS];
+  unsigned i;
+  for (i = 0; i < n; i++) {
+    if (!words_next(s, &w))
+      return NULL;
+    limbs[i] = val_nat(m, w);
+  }
+  return val_op(m, VAL_OP, op, 0, 0, limbs, n);
+}
 
 /* A family value: the constructor TAG, then each field at its type in the
    environment of the family parameters. */
@@ -2106,6 +2223,12 @@ static const Value *words_decode(Machine *m, WordStream *s, const Value *t, unsi
     y = x == NULL ? NULL : words_decode(m, s, t->args[1], depth + 1);
     return y == NULL ? NULL : val_make(m, OP_PAIR, 0, 2, x, y, NULL);
   }
+  if (val_is(t, OP_DIGEST) || val_is(t, OP_KEY))
+    return words_fr(m, s);
+  if (val_is(t, OP_VKEY))
+    return words_raw(m, s, OP_VKEY_WORDS, VKEY_WORDS);
+  if (val_is(t, OP_SIG))
+    return words_raw(m, s, OP_SIG_WORDS, SIG_WORDS);
   if (!val_is(t, OP_NAT) && !val_is(t, OP_BOOL) && !val_is(t, OP_OPTION) && !val_is(t, OP_FAMILY))
     return words_none(m);
   if (!words_next(s, &w))
@@ -2149,6 +2272,28 @@ static int words_put(Machine *m, WordOut *o, uint64_t w) {
 }
 
 static int words_encode(Machine *m, WordOut *o, const Value *t, const Value *v, unsigned depth);
+
+/* Writes the 4 limbs of the Fr value V, low limb first. */
+static int words_encode_fr(Machine *m, WordOut *o, const Value *v) {
+  unsigned i;
+  int ok = 1;
+  if (!val_is(v, OP_FR))
+    return words_mismatch(m);
+  for (i = 0; i < FR_WORDS && ok; i++)
+    ok = v->args[i]->kind == VAL_NAT ? words_put(m, o, v->args[i]->nat) : words_mismatch(m);
+  return ok;
+}
+
+/* Writes the N words of a VKey or a Sig value V (OP the value form). */
+static int words_encode_raw(Machine *m, WordOut *o, const Value *v, Op op, unsigned n) {
+  unsigned i;
+  int ok = 1;
+  if (!val_is(v, op) || v->argc != n)
+    return words_mismatch(m);
+  for (i = 0; i < n && ok; i++)
+    ok = v->args[i]->kind == VAL_NAT ? words_put(m, o, v->args[i]->nat) : words_mismatch(m);
+  return ok;
+}
 
 /* A family value: the constructor tag, then each field. */
 static int words_encode_ctor(Machine *m, WordOut *o, const Value *t, const Value *v, unsigned depth) {
@@ -2194,6 +2339,12 @@ static int words_encode(Machine *m, WordOut *o, const Value *t, const Value *v, 
     return words_put(m, o, 0u);
   if (val_is(t, OP_OPTION))
     return val_is(v, OP_SOME) ? words_put(m, o, 1u) && words_encode(m, o, t->args[0], v->args[0], depth + 1) : words_mismatch(m);
+  if (val_is(t, OP_DIGEST) || val_is(t, OP_KEY))
+    return words_encode_fr(m, o, v);
+  if (val_is(t, OP_VKEY))
+    return words_encode_raw(m, o, v, OP_VKEY_WORDS, VKEY_WORDS);
+  if (val_is(t, OP_SIG))
+    return words_encode_raw(m, o, v, OP_SIG_WORDS, SIG_WORDS);
   if (val_is(t, OP_PROD))
     return val_is(v, OP_PAIR) ? words_encode(m, o, t->args[0], v->args[0], depth + 1) &&
                                     words_encode(m, o, t->args[1], v->args[1], depth + 1)
@@ -2201,6 +2352,58 @@ static int words_encode(Machine *m, WordOut *o, const Value *t, const Value *v, 
   if (val_is(t, OP_FAMILY))
     return words_encode_ctor(m, o, t, v, depth);
   return words_mismatch(m);
+}
+
+/* The stream words of X : T into O. The encode runs under a scratch
+   diagnostic: a mismatch means X is not closed yet. Returns 2 for a trap, -1
+   when the diagnostic is set, 0 while X is not closed, 1 when O holds the
+   words. */
+static int words_stream(Machine *m, const Value *t, const Value *x, WordOut *o) {
+  Diag scratch;
+  Diag *diag = m->diag;
+  int ok;
+  int failed;
+  memset(o, 0, sizeof *o);
+  diag_init(&scratch);
+  m->diag = &scratch;
+  ok = words_encode(m, o, t, x, 0u);
+  m->diag = diag;
+  failed = !ok && scratch.set && strcmp(scratch.code, "EVAL_ENTRY") != 0;
+  if (failed && !diag->set)
+    *diag = scratch;
+  if (o->trap)
+    return 2;
+  if (failed)
+    return -1;
+  return ok ? 1 : 0;
+}
+
+/* hashOf (Q-S4-7): the Poseidon2 digest with the domain tag TAG of the
+   stream form of X : T. The eval keeps hashOf stuck while X is not closed. */
+int words_hash(Machine *m, uint64_t tag, const Value *t, const Value *x, Fr *out) {
+  WordOut o;
+  int r = words_stream(m, t, x, &o);
+  if (r == 1)
+    poseidon2_hash(tag, o.words, o.count, out);
+  return r;
+}
+
+int words_frost(Machine *m, const uint8_t *pk, const Value *t, const Value *x, const uint8_t *sig, int *valid) {
+  WordOut o;
+  uint8_t *bytes;
+  size_t i;
+  int r = words_stream(m, t, x, &o);
+  if (r != 1)
+    return r;
+  bytes = arena_alloc(m->arena, 8u * (size_t)o.count + 1u);
+  if (bytes == NULL) {
+    diag_fail(m->diag, "OOM", m->def, "out of memory");
+    return -1;
+  }
+  for (i = 0; i < 8u * (size_t)o.count; i++)
+    bytes[i] = (uint8_t)(o.words[i / 8u] >> (8u * (i % 8u)));
+  *valid = ed25519_verify(pk, bytes, 8u * (size_t)o.count, sig);
+  return 1;
 }
 
 /* The status after a NULL value: the diagnostic is set, or memory ran out. */

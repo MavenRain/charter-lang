@@ -1,0 +1,2 @@
+bad : Digest
+bad = hashOf 1 (ℕ → ℕ) (λ (x : ℕ) → x)

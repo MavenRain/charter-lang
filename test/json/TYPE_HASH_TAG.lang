@@ -1,0 +1,2 @@
+bad : ℕ → Digest
+bad n = hashOf 6 ℕ n

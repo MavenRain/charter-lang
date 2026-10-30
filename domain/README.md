@@ -86,3 +86,15 @@ declare a data type, so the data type must be here. FreeMon replaces
    remove that file and its block in `test/gate.sh`.
 4. Run `make check` in the repository root. The build makes
    `build/domain.c` again when `domain/domain.lang` changes.
+
+## Hashes (S4 U3)
+
+| Definition | Value | Ruling |
+|---|---|---|
+| `commit k` | `hashOf 2 Key k`: the commitment to the key `k` | Q-S4-7 |
+| `prf k e u` | `hashOf 4 (Key × ℕ × ℕ) (pack k (pack e u))`: the PRF of the key `k` at `e` and `u` | Q-S4-7 |
+| `chainZero` | `hashOf 1 (Eq ℕ 0 0) refl` = H_1([]): the first chain entry h_0. The stream form of `Eq ℕ 0 0` has 0 words. | Q-S4-5, Q-S4-9 |
+| `Entry` | `ℕ × Digest × Digest × Digest × Sig`: the chain entry e_i = (i, h_{i-1}, op_i, Pi_i, sig_i), with op_i and Pi_i as digests | Q-S4-16 |
+| `chainStep i prev opD piD sig` | `hashOf 1 Entry (pack i (pack prev (pack opD (pack piD sig))))`: the chain entry h_i | Q-S4-9, Q-S4-16 |
+
+The chain step h_i hashes the entry, with op_i and Pi_i as digests (Q-S4-16). The core op `merkleRoot : FreeMon Digest → Digest` (Q-S4-6) gives the root of the Merkle tree of 16 levels over a list of digests.

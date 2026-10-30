@@ -7,9 +7,9 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S3)
+## Status (S4)
 
-S1, S2a, S2b, S2c, S2d and S3 are built. The front end has the leaf-lang surface. `langc fmt`
+S1, S2a, S2b, S2c, S2d, S3 and S4 are built. The front end has the leaf-lang surface. `langc fmt`
 prints the one canonical form, and `langc check --json` gives a JSON
 diagnostic with a fix hint and the counts parsed, typed and laws (the law
 definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
@@ -62,12 +62,30 @@ words. `examples/node.lang` has the node entry points (`nodeInit`,
 points (the 10 run functions at `natCMon` and `clientVerdict`). The gate
 compares `langc eval --words` and Wasm on 41 entry stream rows.
 
+S4 adds the hash and the signature check. The core types `Digest` and
+`Key` are elements of the BN254 scalar field. `hashOf tag T x` is the
+Poseidon2 hash (BN254, t = 3, Q-C4) of the word stream of `x : T`
+(`SPEC.md` section 7), with the domain tag `tag`, a literal 1 to 5
+(Q-S4-1, Q-S4-2). `merkleRoot xs` gives the root of a Merkle tree of
+fixed depth 16 over `xs : FreeMon Digest` (Q-S4-3). In
+`domain/domain.lang`, `chainStep` gives the step of the hash chain over an
+`Entry` (Q-S4-9, Q-S4-16). `frostVerify vk T msg sig` verifies the
+signature `sig : Sig` on the word stream of `msg : T` under the group key
+`vk : VKey`: FROST(Ed25519, SHA-512) with the cofactored check (Q-C1,
+Q-S4-12, Q-S4-14). Verification rejects pure small-order public keys. Only
+the verify is built (Q-S4-4). Each operation has a C meaning for
+`langc eval`, and `langc build` emits Wasm kernels for
+Poseidon2, SHA-512 and Ed25519 (Q-C6). The gate checks the published
+vectors: the HorizenLabs Poseidon2 BN254 t = 3 vector and the RFC 9591
+Appendix E.1 signature.
+
 ## When to reach for charter-lang
 
 | Task | charter-lang? |
 |---|---|
 | state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes (S2b to S2d) |
 | run the clear meaning of a transcript in Wasm | yes (S3) |
+| hash a value, make a Merkle root or a hash chain step, and verify a FROST signature, in `langc eval` and in Wasm | yes (S4) |
 | tally encrypted ballots and update encrypted credits under threshold TFHE | yes, PLANNED (S5, S6) |
 | prove membership and ballot well-formedness in a circuit | yes, PLANNED (S7) |
 | verify a transcript as a member node or as a public verifier | yes, PLANNED (S8) |

@@ -69,8 +69,20 @@ typedef enum {
   IR_STMT_WHILE,  /* counter := expr; run body while counter > 0 and local != 0,
                      counter decreasing by 1 at each run; body sets local */
   IR_STMT_TRAP,   /* stop the call: Wasm unreachable, EVM REVERT */
-  IR_STMT_RETURN  /* return expr */
+  IR_STMT_RETURN, /* return expr */
+  IR_STMT_KERNEL  /* local := the address of a new Digest block [0, the 4
+                     words, each with flag 0]: the Poseidon2 kernel over the
+                     fields[0] = n stream words at the address expr, 8 bytes
+                     apart. counter = the hash tag (1 to 5), or 0 for the
+                     Merkle root of a FreeMon Digest stream (Q-S4-10), or
+                     IR_KERNEL_FROST (below) */
 } IrStmtKind;
+
+/* The counter of the IR_STMT_KERNEL of frostVerify (Q-S4-12 (a)): local :=
+   the verify bit (0 or 1) of the 8-word Sig at fields[2] under the 4-word
+   VKey at fields[1] on the 8 * fields[0] message bytes at the address expr
+   (the stream words). */
+enum { IR_KERNEL_FROST = 6 };
 
 struct IrStmt {
   IrStmtKind kind;

@@ -725,3 +725,25 @@ ledgerSum M m = fold (cmZero M) (λ (h : ℕ × cmCarrier M) (acc : cmCarrier M)
 
 voucherSum : (M : CMon) → (v : FreeMon (Voucher M)) → cmCarrier M
 voucherSum M v = fold (cmZero M) (λ (h : Voucher M) (acc : cmCarrier M) → cmAdd M (voucherAmount M h) acc) v
+
+-- Hashes (S4 U3). The commitment to a key (Q-S4-7).
+commit : (k : Key) → Digest
+commit k = hashOf 2 Key k
+
+-- The PRF of the key k at e and u (Q-S4-7).
+prf : (k : Key) → (e : ℕ) → (u : ℕ) → Digest
+prf k e u = hashOf 4 (Key × ℕ × ℕ) (pack k (pack e u))
+
+-- The first chain entry h_0 = H_1([]) (Q-S4-5, Q-S4-9): the stream form of
+-- Eq ℕ 0 0 has 0 words. chainStep below gives h_i for i above 0.
+chainZero : Digest
+chainZero = hashOf 1 (Eq ℕ 0 0) refl
+
+-- A chain entry e_i = (i, h_{i-1}, op_i, Pi_i, sig_i) (L502, Q-S4-16): op_i
+-- and Pi_i enter as the digests that the caller gives.
+Entry : Type 0
+Entry = ℕ × Digest × Digest × Digest × Sig
+
+-- The chain step h_i = H_1(e_i) (L502, Q-S4-9, Q-S4-16).
+chainStep : (i : ℕ) → (prev : Digest) → (opD : Digest) → (piD : Digest) → (sig : Sig) → Digest
+chainStep i prev opD piD sig = hashOf 1 Entry (pack i (pack prev (pack opD (pack piD sig))))

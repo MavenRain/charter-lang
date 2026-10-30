@@ -61,6 +61,10 @@ reason. test/json/expect.txt holds the exact JSON lines of each fixture.
 | `REFUSE_NAME` | error | check | A declaration uses a core name, a domain name, a reserved word or a name that is already declared. | test/json/REFUSE_NAME.lang |
 | `TYPE_REFL` | error | check | `refl` where the two sides do not have the same normal form. The message gives the two normal forms. | test/json/TYPE_REFL.lang |
 | `TYPE_MISMATCH` | error | check | A term does not have the type that its position needs. | test/json/TYPE_MISMATCH.lang |
+| `TYPE_HASH_TAG` | error | check | The tag of `hashOf` is not a literal 1 to 5 (Q-S4-7). | test/json/TYPE_HASH_TAG.lang |
+| `TYPE_HASH` | error | check | The type of `hashOf` has no stream form (Q-S4-1). | test/json/TYPE_HASH.lang |
+| `TYPE_MERKLE` | error | check | `merkleRoot` needs the family `FreeMon` of domain/domain.lang (Q-S4-6). | no fixture: domain/domain.lang always has FreeMon, so no program can get this code |
+| `TYPE_FROST` | error | check | The message type of `frostVerify` has no stream form (Q-S4-12). | test/json/TYPE_FROST.lang |
 | `NAME_UNKNOWN` | error | check | A name that is not in scope. The span is the name. For a kit name that S1 removed, the message says what to use. `fix` is the new name for `Flag` (`Bool`), `flagYes` (`true`), `flagNo` (`false`), `pair` (`pack`), `first` (`witness`) and `second` (`payload`). `fix` is `null` for `Prod`, `List`, `nil`, `cons`, `filter` and `unfold`, because a name cannot replace them. | test/json/NAME_UNKNOWN.lang |
 | `TYPE_UNIVERSE` | error | check | A universe level that is out of range. | test/json/TYPE_UNIVERSE.lang |
 | `TYPE_INFER` | error | check | The checker cannot find the type of a term at that position. Add a type: an annotated binder or a signature. | test/json/TYPE_INFER.lang |

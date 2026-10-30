@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "front/check.h"
+#include "front/poseidon2.h"
 
 #define IR_PRINT_DEPTH_MAX 4000u
 
@@ -512,6 +513,20 @@ static void stmt_print(const IrStmt *s, FILE *out, unsigned depth) {
     }
     close_print(out, depth);
     return;
+  case IR_STMT_KERNEL:
+    fprintf(out, "l%u := kernel ", (unsigned)s->local);
+    if (s->counter == 0 || s->counter == IR_KERNEL_FROST)
+      fputs(s->counter == 0 ? "merkle (" : "frost (", out);
+    else
+      fprintf(out, "hash %u (", (unsigned)s->counter);
+    expr_print(s->expr, out, 0);
+    fputs(", ", out);
+    for (i = 0; i < s->field_count; i++) {
+      fputs(", ", out);
+      expr_print(s->fields[i], out, 0);
+    }
+    fputs(")\n", out);
+    return;
   case IR_STMT_REPEAT:
     fprintf(out, "repeat l%u := ", (unsigned)s->counter);
     expr_print(s->expr, out, 0);
@@ -571,6 +586,8 @@ void ir_print(const IrProgram *prog, FILE *out) {
 }
 
 static int lower(Low *l, Buf *b, const Value *v, Operand *out);
+static int lower_hash(Low *l, Buf *b, const Value *v, Operand *out);
+static int lower_frost(Low *l, Buf *b, const Value *v, Operand *out);
 
 static int closure(Low *l) {
   return diag_fail(l->m->diag, "REFUSE_RUNTIME_CLOSURE", l->m->def, "a function value must exist at run time (HOST-LIMIT)");
@@ -629,6 +646,10 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_DIGEST:
+  case OP_KEY:
+  case OP_VKEY:
+  case OP_SIG:
   case OP_PROD:
   case OP_SUM:
   case OP_OPTION:
@@ -641,6 +662,17 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
     return give(l, out, 0, 0);
   case OP_TRUE:
     return give(l, out, 1, 0);
+  case OP_FR:
+    return ctor_full(l, b, v, 0, FR_WORDS, 0, out);
+  case OP_VKEY_WORDS:
+    return ctor_full(l, b, v, 0, VKEY_WORDS, 0, out);
+  case OP_SIG_WORDS:
+    return ctor_full(l, b, v, 0, SIG_WORDS, 0, out);
+  case OP_HASH:
+  case OP_MERKLE:
+    return lower_hash(l, b, v, out);
+  case OP_FROST:
+    return lower_frost(l, b, v, out);
   case OP_PAIR:
   case OP_PACK:
     return ctor_full(l, b, v, 0, 2, 0, out);
@@ -1208,6 +1240,10 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_DIGEST:
+  case OP_KEY:
+  case OP_VKEY:
+  case OP_SIG:
   case OP_PROD:
   case OP_SUM:
   case OP_OPTION:
@@ -1228,7 +1264,15 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_REFL:
   case OP_CTOR:
   case OP_PURE:
+  case OP_FR:
+  case OP_VKEY_WORDS:
+  case OP_SIG_WORDS:
     return internal(l, "a stuck canonical value");
+  case OP_HASH:
+  case OP_MERKLE:
+    return lower_hash(l, b, v, out);
+  case OP_FROST:
+    return lower_frost(l, b, v, out);
   case OP_FIRST:
   case OP_WITNESS:
     return field_of(l, b, v->args[0], 0, out);
@@ -1374,6 +1418,8 @@ typedef struct {
   uint32_t end;   /* 8n */
   uint32_t out;   /* the output words, the last first: blocks [word, next] */
   uint32_t count; /* the output word count */
+  int lazy;       /* 0: a trapped value traps (a stream entry); 1: it sets flag (hashOf, Q-S4-11 (a)) */
+  uint32_t flag;  /* lazy: the trap flag of the words */
 } Stream;
 
 /* LOCAL := a new block of the N words FIELDS. The block goes into a new
@@ -1449,6 +1495,41 @@ static int frame(Low *l, Buf *b, uint32_t frames, uint32_t state, const IrExpr *
   w[1] = node == NULL ? next : node;
   w[2] = next;
   return push(l, b, frames, w, node == NULL ? 2u : 3u);
+}
+
+/* A Digest or a Key: 4 words, low word first, then the block [0, the 4
+   words]. A value not below r traps (fr_from_words). Below r, from the low
+   word up: w < r_k, or w = r_k and the lower words are below. */
+static int decode_fr(Low *l, Buf *b, Stream *st, Operand *out) {
+  Operand ops[FR_WORDS];
+  uint64_t r[FR_WORDS];
+  Fr modulus = fr_modulus();
+  const IrExpr *below;
+  uint32_t k;
+  fr_to_words(&modulus, r);
+  for (k = 0; k < FR_WORDS; k++) {
+    ops[k].f = ex_const(l, 0);
+    if (!read_word(l, b, st, &ops[k].w))
+      return 0;
+  }
+  below = ex_bin(l, IR_OP_SUB, ex_const(l, 1), ex_bin(l, IR_OP_LE, ex_const(l, r[0]), ops[0].w));
+  for (k = 1; k < FR_WORDS; k++)
+    below = ex_or(l, ex_bin(l, IR_OP_SUB, ex_const(l, 1), ex_bin(l, IR_OP_LE, ex_const(l, r[k]), ops[k].w)),
+                  ex_bin(l, IR_OP_MUL, ex_bin(l, IR_OP_EQ, ops[k].w, ex_const(l, r[k])), below));
+  return trap_when(l, b, ex_bin(l, IR_OP_EQ, below, ex_const(l, 0))) && block_ops(l, b, 0, ops, FR_WORDS, out);
+}
+
+/* A VKey or a Sig: N words, low word first, then the block [0, the N words].
+   Every word is valid: the verify rejects a bad key or signature. */
+static int decode_words(Low *l, Buf *b, Stream *st, uint32_t n, Operand *out) {
+  Operand ops[SIG_WORDS];
+  uint32_t k;
+  for (k = 0; k < n; k++) {
+    ops[k].f = ex_const(l, 0);
+    if (!read_word(l, b, st, &ops[k].w))
+      return 0;
+  }
+  return block_ops(l, b, 0, ops, n, out);
 }
 
 static int decode(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Operand *out);
@@ -1641,6 +1722,10 @@ static int decode(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Op
   if (val_is(t, OP_PROD))
     return decode(l, b, st, t->args[0], depth + 1, &ops[0]) && decode(l, b, st, t->args[1], depth + 1, &ops[1]) &&
            block_ops(l, b, 0, ops, 2u, out);
+  if (val_is(t, OP_DIGEST) || val_is(t, OP_KEY))
+    return decode_fr(l, b, st, out);
+  if (val_is(t, OP_VKEY) || val_is(t, OP_SIG))
+    return decode_words(l, b, st, val_is(t, OP_VKEY) ? (uint32_t)VKEY_WORDS : (uint32_t)SIG_WORDS, out);
   if (val_is(t, OP_OPTION))
     return decode_option(l, b, st, t, depth, out);
   if (!val_is(t, OP_FAMILY))
@@ -1650,12 +1735,21 @@ static int decode(Low *l, Buf *b, Stream *st, const Value *t, unsigned depth, Op
   return decode_family(l, b, st, t, depth, out);
 }
 
-/* One output word: a trapped OP traps (each position is strict, as eval). */
+/* A trap flag C met by the encode walk. Strict: TRAP when C is not 0. Lazy
+   (hashOf, Q-S4-11 (a)): flag := flag OR C. */
+static int put_flag(Low *l, Buf *b, const Stream *st, const IrExpr *c) {
+  if (!st->lazy || is_const(c, 0))
+    return trap_when(l, b, c);
+  return set(l, b, st->flag, ex_or(l, ex_local(l, st->flag), c));
+}
+
+/* One output word: a trapped OP traps (each position is strict, as eval),
+   or sets the flag of a lazy walk. */
 static int put_word(Low *l, Buf *b, Stream *st, Operand op) {
   const IrExpr *w[2];
   w[0] = op.w;
   w[1] = ex_local(l, st->out);
-  return trap_when(l, b, op.f) && push(l, b, st->out, w, 2u) &&
+  return put_flag(l, b, st, op.f) && push(l, b, st->out, w, 2u) &&
          set(l, b, st->count, ex_bin(l, IR_OP_ADD, ex_local(l, st->count), ex_const(l, 1)));
 }
 
@@ -1710,6 +1804,16 @@ static int open_task(Low *l, Buf *b, Stream *st, const FamilyInfo *f, const uint
   return st_switch(l, b, tag, arms, f->ctor_count);
 }
 
+/* open_task at the field CHILD. A lazy walk opens it only when its flag is
+   0, so it never loads through a trapped address. */
+static int open_child(Low *l, Buf *b, Stream *st, const FamilyInfo *f, const uint32_t *base, uint32_t tasks, Slot child) {
+  Buf in = buf_under(b);
+  Buf none = buf_under(b);
+  if (!st->lazy)
+    return open_task(l, b, st, f, base, tasks, ex_local(l, child.w));
+  return open_task(l, &in, st, f, base, tasks, ex_local(l, child.w)) && if_flag(l, b, ex_local(l, child.f), &none, &in);
+}
+
 /* A recursive family in prefix order, as words_encode: a WHILE over the
    task stack. */
 static int encode_tree(Low *l, Buf *b, Stream *st, const Value *t, const IrExpr *addr, unsigned depth) {
@@ -1743,8 +1847,8 @@ static int encode_tree(Low *l, Buf *b, Stream *st, const Value *t, const IrExpr 
       else if (c->fields[i].recursive) {
         child = slot_new(l);
         ok = frame(l, &arm, tasks, base[k] + i + 1u, ex_local(l, node), ex_load(l, ex_local(l, tasks), 2)) &&
-             store(l, &arm, child, field_op(l, ex_local(l, node), i)) && trap_when(l, &arm, ex_local(l, child.f)) &&
-             open_task(l, &arm, st, f, base, tasks, ex_local(l, child.w));
+             store(l, &arm, child, field_op(l, ex_local(l, node), i)) && put_flag(l, &arm, st, ex_local(l, child.f)) &&
+             open_child(l, &arm, st, f, base, tasks, child);
       } else
         ok = frame(l, &arm, tasks, base[k] + i + 1u, ex_local(l, node), ex_load(l, ex_local(l, tasks), 2)) &&
              encode(l, &arm, st, eval_core(l->m, env, c->fields[i].type), field_op(l, ex_local(l, node), i), depth + 1);
@@ -1770,18 +1874,13 @@ static int encode_option(Low *l, Buf *b, Stream *st, const Value *t, const IrExp
   return st_switch(l, b, tag, arms, 2u);
 }
 
-static int encode(Low *l, Buf *b, Stream *st, const Value *t, Operand op, unsigned depth) {
-  const IrExpr *addr;
+/* The rest of encode at the address W of a value whose flag is 0. */
+static int encode_addr(Low *l, Buf *b, Stream *st, const Value *t, const IrExpr *w, unsigned depth) {
+  const IrExpr *addr = atom(l, b, w);
   const Value *x;
-  if (t == NULL)
-    return got(l, t);
-  if (depth > EVAL_DEPTH_LIMIT)
-    return internal(l, "a stream type nested too deep");
-  if (t->kind == VAL_OP && (val_is(t, OP_NAT) || val_is(t, OP_BOOL)))
-    return put_word(l, b, st, op);
-  if (t->kind == VAL_OP && val_is(t, OP_EQ))
-    return trap_when(l, b, op.f);
-  if (!trap_when(l, b, op.f) || (addr = atom(l, b, op.w)) == NULL)
+  uint32_t k;
+  int ok = 1;
+  if (addr == NULL)
     return 0;
   if (t->kind == VAL_SIGMA) {
     x = fresh(l, field_op(l, addr, 0));
@@ -1790,6 +1889,20 @@ static int encode(Low *l, Buf *b, Stream *st, const Value *t, Operand op, unsign
   }
   if (t->kind != VAL_OP)
     return internal(l, "a stream type without a stream form");
+  /* A Digest or a Key: the 4 words, low word first. Each limb flag is 0
+     (the limbs are literals, stream words or kernel words). */
+  if (val_is(t, OP_DIGEST) || val_is(t, OP_KEY)) {
+    for (k = 0; k < FR_WORDS && ok; k++)
+      ok = put_word(l, b, st, operand(ex_load(l, addr, 1u + 2u * k), ex_const(l, 0)));
+    return ok;
+  }
+  /* A VKey or a Sig: the words, low word first (literals or stream words, so
+     each flag is 0, as a Digest). */
+  if (val_is(t, OP_VKEY) || val_is(t, OP_SIG)) {
+    for (k = 0; k < (val_is(t, OP_VKEY) ? (uint32_t)VKEY_WORDS : (uint32_t)SIG_WORDS) && ok; k++)
+      ok = put_word(l, b, st, operand(ex_load(l, addr, 1u + 2u * k), ex_const(l, 0)));
+    return ok;
+  }
   if (val_is(t, OP_PROD))
     return encode(l, b, st, t->args[0], field_op(l, addr, 0), depth + 1) &&
            encode(l, b, st, t->args[1], field_op(l, addr, 1), depth + 1);
@@ -1802,10 +1915,30 @@ static int encode(Low *l, Buf *b, Stream *st, const Value *t, Operand op, unsign
   return encode_family(l, b, st, t, addr, depth);
 }
 
-/* The output block at the end of the heap: [m, the m words]. The output
+/* The value OP of type T as output words. A lazy walk loads through the
+   address of OP only when its flag is 0. */
+static int encode(Low *l, Buf *b, Stream *st, const Value *t, Operand op, unsigned depth) {
+  Buf in = buf_under(b);
+  Buf none = buf_under(b);
+  if (t == NULL)
+    return got(l, t);
+  if (depth > EVAL_DEPTH_LIMIT)
+    return internal(l, "a stream type nested too deep");
+  if (t->kind == VAL_OP && (val_is(t, OP_NAT) || val_is(t, OP_BOOL)))
+    return put_word(l, b, st, op);
+  if (t->kind == VAL_OP && val_is(t, OP_EQ))
+    return put_flag(l, b, st, op.f);
+  if (!put_flag(l, b, st, op.f))
+    return 0;
+  if (!st->lazy || is_const(op.f, 0))
+    return encode_addr(l, b, st, t, op.w, depth);
+  return encode_addr(l, &in, st, t, op.w, depth) && if_flag(l, b, op.f, &none, &in);
+}
+
+/* HEAD := the block [m, the m words] at the end of the heap. The output
    chain has the last word first: reverse it, then copy each word into a new
    1-word block. Back-to-back ALLOCs are contiguous. */
-static int output(Low *l, Buf *b, Stream *st) {
+static int out_words(Low *l, Buf *b, Stream *st, uint32_t *head) {
   uint32_t q = local_new(l);
   uint32_t res = local_new(l);
   uint32_t word = local_new(l);
@@ -1821,8 +1954,126 @@ static int output(Low *l, Buf *b, Stream *st) {
   if (!push(l, b, res, w, 1u))
     return 0;
   w[0] = ex_load(l, ex_local(l, q), 0);
+  *head = res;
   return push(l, &copy, word, w, 1u) && set(l, &copy, q, ex_load(l, ex_local(l, q), 1)) &&
-         st_repeat(l, b, ex_local(l, st->count), &copy) && emit(l, b, stmt_expr(l, IR_STMT_RETURN, ex_local(l, res)));
+         st_repeat(l, b, ex_local(l, st->count), &copy);
+}
+
+/* A stream entry returns the block [m, the m words]. */
+static int output(Low *l, Buf *b, Stream *st) {
+  uint32_t res = 0;
+  return out_words(l, b, st, &res) && emit(l, b, stmt_expr(l, IR_STMT_RETURN, ex_local(l, res)));
+}
+
+/* hashOf and merkleRoot (Q-S4-10 (a)): the value X of type T as stream words
+   on the heap (the output codec), then one KERNEL statement; SEL is the hash
+   tag, or 0 for merkle. Lazy (Q-S4-11 (a)): the Digest flag is the OR of the
+   flags of the encode walk, and the kernel runs only when it is 0. */
+static int lower_kernel(Low *l, Buf *b, const Value *t, const Value *x, uint32_t sel, Operand *out) {
+  const IrExpr **fields = arena_alloc(l->m->arena, sizeof *fields);
+  IrStmt *s = stmt_new(l, IR_STMT_KERNEL);
+  Buf call = buf_under(b);
+  Buf none = buf_under(b);
+  Stream st;
+  Operand op;
+  uint32_t head = 0;
+  if (fields == NULL || s == NULL)
+    return fields == NULL ? oom(l) : 0;
+  st.cur = 0;
+  st.end = 0;
+  st.out = local_new(l);
+  st.count = local_new(l);
+  st.lazy = 1;
+  st.flag = local_new(l);
+  if (!set(l, b, st.out, ex_const(l, 0)) || !set(l, b, st.count, ex_const(l, 0)) || !set(l, b, st.flag, ex_const(l, 0)) ||
+      !lower(l, b, x, &op) || !encode(l, b, &st, t, op, 0) || !out_words(l, b, &st, &head))
+    return 0;
+  /* merkleRoot: more than 2^16 leaves trap (n = 5L + 1 words, Q-S3-6). */
+  if (sel == 0u && !set(l, b, st.flag, ex_or(l, ex_local(l, st.flag), ex_bin(l, IR_OP_LE, ex_const(l, 5u * 65536u + 2u), ex_local(l, st.count)))))
+    return 0;
+  fields[0] = ex_local(l, st.count);
+  s->local = local_new(l);
+  s->counter = sel;
+  s->expr = ex_bin(l, IR_OP_ADD, ex_local(l, head), ex_const(l, 8));
+  s->fields = fields;
+  s->field_count = 1u;
+  *out = operand(ex_local(l, s->local), ex_local(l, st.flag));
+  return s->expr != NULL && fields[0] != NULL && emit(l, &call, s) && if_flag(l, b, ex_local(l, st.flag), &none, &call);
+}
+
+/* hashOf TAG T X, or merkleRoot XS at FreeMon Digest (the family found by
+   its name, as rule_merkle). Fewer arguments: a function. */
+static int lower_hash(Low *l, Buf *b, const Value *v, Operand *out) {
+  const Value *digest;
+  const Value *list = NULL;
+  uint32_t i;
+  if (v->op == OP_HASH)
+    return v->argc < 3u ? closure(l) : lower_kernel(l, b, v->args[1], v->args[2], (uint32_t)v->args[0]->nat, out);
+  if (v->argc < 1u)
+    return closure(l);
+  digest = val_op(l->m, VAL_OP, OP_DIGEST, 0, 0, NULL, 0);
+  for (i = 0; i < l->m->family_count && list == NULL; i++)
+    if (strcmp(l->m->families[i].name, "FreeMon") == 0 && l->m->families[i].param_count == 1u)
+      list = val_op(l->m, VAL_OP, OP_FAMILY, i, 0, &digest, 1);
+  return list == NULL ? internal(l, "merkleRoot without the family FreeMon") : lower_kernel(l, b, list, v->args[0], 0u, out);
+}
+
+/* frostVerify VK T MSG SIG (Q-S4-12 (a)): MSG : T as stream words on the
+   heap (the output codec), the words of VK and SIG copied into 2 new blocks,
+   then one KERNEL statement (IR_KERNEL_FROST). Lazy, as hashOf: the Bool flag
+   is the OR of the flags of VK, SIG and the encode walk, and the copies and
+   the kernel run only when it is 0. Fewer arguments: a function. */
+static int lower_frost(Low *l, Buf *b, const Value *v, Operand *out) {
+  const IrExpr **fields = arena_alloc(l->m->arena, 3u * sizeof *fields);
+  const IrExpr *w[SIG_WORDS];
+  const IrExpr *key;
+  const IrExpr *sg;
+  IrStmt *s = stmt_new(l, IR_STMT_KERNEL);
+  Buf call = buf_under(b);
+  Buf none = buf_under(b);
+  Stream st;
+  Operand vk;
+  Operand sig;
+  Operand op;
+  uint32_t head = 0;
+  uint32_t k;
+  if (v->argc < 4u)
+    return closure(l);
+  if (fields == NULL || s == NULL)
+    return fields == NULL ? oom(l) : 0;
+  st.cur = 0;
+  st.end = 0;
+  st.out = local_new(l);
+  st.count = local_new(l);
+  st.lazy = 1;
+  st.flag = local_new(l);
+  if (!set(l, b, st.out, ex_const(l, 0)) || !set(l, b, st.count, ex_const(l, 0)) || !set(l, b, st.flag, ex_const(l, 0)) ||
+      !lower(l, b, v->args[0], &vk) || !lower(l, b, v->args[3], &sig) || !lower(l, b, v->args[2], &op) ||
+      !encode(l, b, &st, v->args[1], op, 0) || !out_words(l, b, &st, &head) ||
+      !set(l, b, st.flag, ex_or(l, ex_local(l, st.flag), ex_or(l, vk.f, sig.f))))
+    return 0;
+  key = atom(l, &call, vk.w);
+  sg = atom(l, &call, sig.w);
+  if (key == NULL || sg == NULL)
+    return 0;
+  fields[0] = ex_local(l, st.count);
+  fields[1] = ex_local(l, local_new(l));
+  fields[2] = ex_local(l, local_new(l));
+  for (k = 0; k < VKEY_WORDS; k++)
+    w[k] = ex_load(l, key, 1u + 2u * k);
+  if (fields[1] == NULL || !push(l, &call, fields[1]->local, w, VKEY_WORDS))
+    return 0;
+  for (k = 0; k < SIG_WORDS; k++)
+    w[k] = ex_load(l, sg, 1u + 2u * k);
+  if (fields[2] == NULL || !push(l, &call, fields[2]->local, w, SIG_WORDS))
+    return 0;
+  s->local = local_new(l);
+  s->counter = IR_KERNEL_FROST;
+  s->expr = ex_bin(l, IR_OP_ADD, ex_local(l, head), ex_const(l, 8));
+  s->fields = fields;
+  s->field_count = 3u;
+  *out = operand(ex_local(l, s->local), ex_local(l, st.flag));
+  return s->expr != NULL && fields[0] != NULL && emit(l, &call, s) && if_flag(l, b, ex_local(l, st.flag), &none, &call);
 }
 
 /* The stream entry INDEX with PARAM_COUNT parameters (words_entry). */
@@ -1849,6 +2100,8 @@ static int lower_stream(Machine *m, uint32_t index, uint32_t param_count, IrFunc
   st.end = local_new(&l);
   st.out = local_new(&l);
   st.count = local_new(&l);
+  st.lazy = 0;
+  st.flag = 0;
   ok = set(&l, &body, st.end, ex_bin(&l, IR_OP_MUL, ex_local(&l, 0), ex_const(&l, 8))) &&
        set(&l, &body, st.cur, ex_const(&l, 0)) && set(&l, &body, st.out, ex_const(&l, 0)) &&
        set(&l, &body, st.count, ex_const(&l, 0));

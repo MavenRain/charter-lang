@@ -16,3 +16,6 @@ no-type.lang TYPE_INFER
 bare-fun.lang TYPE_INFER
 arity.lang TYPE_ARITY
 not-function.lang TYPE_NOT_FUNCTION
+hash-tag.lang TYPE_HASH_TAG
+hash-type.lang TYPE_HASH
+frost-type.lang TYPE_FROST

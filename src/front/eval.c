@@ -1,6 +1,8 @@
 /* The evaluator, the conversion test, quote and the printer (see
    front/core.h). SHARED by the tcc kits. */
 #include "front/core.h"
+#include "front/check.h"
+#include "front/ed25519.h"
 
 #include <string.h>
 
@@ -22,7 +24,8 @@ static const char *const OP_NAMES[] = {
   [OP_SYMM] = "symm", [OP_TRANS] = "trans", [OP_TRANSPORT] = "transport",
   [OP_CONG] = "cong", [OP_NAT_ADD] = "natAdd", [OP_NAT_SUB] = "natSub",
   [OP_NAT_MUL] = "natMul", [OP_NAT_EQ] = "natEq", [OP_NAT_LE] = "natLe",
-  [OP_FLAG_IF] = "flagIf", [OP_PROJ] = "?"
+  [OP_FLAG_IF] = "flagIf", [OP_PROJ] = "?", [OP_DIGEST] = "Digest", [OP_KEY] = "Key", [OP_FR] = "fr", [OP_HASH] = "hashOf", [OP_MERKLE] = "merkleRoot",
+  [OP_VKEY] = "VKey", [OP_SIG] = "Sig", [OP_VKEY_WORDS] = "vkey", [OP_SIG_WORDS] = "sig", [OP_FROST] = "frostVerify"
 };
 
 /* The number of arguments of each operation. VARIES: it comes from the
@@ -38,7 +41,8 @@ static const unsigned char OP_ARITY[] = {
   [OP_FOLD_FAMILY] = VARIES, [OP_IND_FAMILY] = VARIES, [OP_IND_OPTION] = 4, [OP_UNFOLD] = 3, [OP_FILTER] = 2, [OP_WITNESS] = 1,
   [OP_PAYLOAD] = 1, [OP_SYMM] = 1, [OP_TRANS] = 2, [OP_TRANSPORT] = 3,
   [OP_CONG] = 2, [OP_NAT_ADD] = 2, [OP_NAT_SUB] = 2, [OP_NAT_MUL] = 2,
-  [OP_NAT_EQ] = 2, [OP_NAT_LE] = 2, [OP_FLAG_IF] = 3, [OP_PROJ] = 1
+  [OP_NAT_EQ] = 2, [OP_NAT_LE] = 2, [OP_FLAG_IF] = 3, [OP_PROJ] = 1, [OP_DIGEST] = 0, [OP_KEY] = 0, [OP_FR] = 4, [OP_HASH] = 3, [OP_MERKLE] = 1,
+  [OP_VKEY] = 0, [OP_SIG] = 0, [OP_VKEY_WORDS] = VKEY_WORDS, [OP_SIG_WORDS] = SIG_WORDS, [OP_FROST] = 4
 };
 
 typedef enum {
@@ -934,6 +938,184 @@ static int arity_ok(const Machine *m, Op op, uint32_t inst, uint32_t n) {
   return n == varied_arity(m, op, inst);
 }
 
+/* hashOf tag T x (Q-S4-7): the Poseidon2 digest with the domain tag of the
+   stream form of x : T, an Fr value of 4 Nat limbs. Stuck while x is not
+   closed; a trap when a component of x is an overflow. */
+static const Value *reduce_hash(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  const Value *limbs[FR_WORDS];
+  uint64_t w[FR_WORDS];
+  Fr d;
+  unsigned i;
+  int r;
+  if (blocked(m, a[0], OP_HASH, 0, 0, a, n, &out))
+    return out;
+  if (a[0]->kind != VAL_NAT)
+    return internal(m, "a hashOf tag that is not a Nat");
+  r = words_hash(m, a[0]->nat, a[1], a[2], &d);
+  if (r == 2)
+    return val_trap(m);
+  if (r < 0)
+    return NULL;
+  if (r == 0)
+    return val_op(m, VAL_STUCK, OP_HASH, 0, 0, a, n);
+  fr_to_words(&d, w);
+  for (i = 0; i < FR_WORDS; i++)
+    limbs[i] = val_nat(m, w[i]);
+  return val_op(m, VAL_OP, OP_FR, 0, 0, limbs, FR_WORDS);
+}
+
+/* The N bytes of a VKey or a Sig value V (OP the value form: N / 8 Nat
+   words, 8 bytes per word, little endian). Returns 0 when V is not one. */
+static int frost_bytes(const Value *v, Op op, uint8_t *out, unsigned n) {
+  unsigned i;
+  if (!val_is(v, op) || v->argc != n / 8u)
+    return 0;
+  for (i = 0; i < n; i++) {
+    if (v->args[i / 8u] == NULL || v->args[i / 8u]->kind != VAL_NAT)
+      return 0;
+    out[i] = (uint8_t)(v->args[i / 8u]->nat >> (8u * (i % 8u)));
+  }
+  return 1;
+}
+
+/* frostVerify vk T msg sig (Q-S4-4, Q-S4-12 (a)): the RFC 8032 verify,
+   cofactored (RFC 9591 6.1), of sig under vk on the bytes of the stream form
+   of msg : T. Stuck while an argument is not closed; a trap when a component
+   of msg is an overflow. */
+static const Value *reduce_frost(Machine *m, const Value *const *a, uint32_t n) {
+  uint8_t pk[ED25519_KEY_BYTES];
+  uint8_t sig[ED25519_SIG_BYTES];
+  const Value *out;
+  int valid = 0;
+  int r;
+  if (blocked(m, a[0], OP_FROST, 0, 0, a, n, &out) || blocked(m, a[3], OP_FROST, 0, 0, a, n, &out))
+    return out;
+  if (!frost_bytes(a[0], OP_VKEY_WORDS, pk, ED25519_KEY_BYTES) || !frost_bytes(a[3], OP_SIG_WORDS, sig, ED25519_SIG_BYTES))
+    return internal(m, "a frostVerify key or signature that is not words");
+  r = words_frost(m, pk, a[1], a[2], sig, &valid);
+  if (r == 2)
+    return val_trap(m);
+  if (r < 0)
+    return NULL;
+  if (r == 0)
+    return val_op(m, VAL_STUCK, OP_FROST, 0, 0, a, n);
+  return val_op(m, VAL_OP, valid ? OP_TRUE : OP_FALSE, 0, 0, NULL, 0);
+}
+
+enum { MERKLE_LEVELS = 16 };
+
+/* The Merkle node H_3(l, r) (Q-S4-6): the digest with tag 3 of the 8 words of
+   (l, r). OUT can be L or R. */
+static void merkle_node(const Fr *l, const Fr *r, Fr *out) {
+  uint64_t w[2 * FR_WORDS];
+  fr_to_words(l, w);
+  fr_to_words(r, w + FR_WORDS);
+  poseidon2_hash(3, w, 2 * FR_WORDS, out);
+}
+
+/* The Fr of a canonical OP_FR value of 4 Nat limbs. Returns 0 when V is not
+   one. */
+static int merkle_leaf(const Value *v, Fr *out) {
+  uint64_t w[FR_WORDS];
+  unsigned i;
+  if (!val_is(v, OP_FR) || v->argc != FR_WORDS)
+    return 0;
+  for (i = 0; i < FR_WORDS; i++) {
+    if (v->args[i] == NULL || v->args[i]->kind != VAL_NAT)
+      return 0;
+    w[i] = v->args[i]->nat;
+  }
+  return fr_from_words(out, w);
+}
+
+/* merkleRoot xs (Q-S4-6): the root of the tree of 16 levels over the leaves of
+   xs in list order. An empty leaf is 0, z_0 = 0 and z_{d+1} = H_3(z_d, z_d).
+   STACK holds the full subtrees, at most one for each level, the lowest level
+   on top. More than 2^16 leaves is a trap. A spine that is not closed is
+   stuck. */
+static const Value *reduce_merkle(Machine *m, const Value *const *a, uint32_t n) {
+  static const uint64_t nothing[FR_WORDS] = {0, 0, 0, 0};
+  Fr zero[MERKLE_LEVELS + 1];
+  Fr stack[MERKLE_LEVELS + 1];
+  unsigned level[MERKLE_LEVELS + 1];
+  const Value *limbs[FR_WORDS];
+  uint64_t w[FR_WORDS];
+  const Value *x = a[0];
+  const Value *out;
+  const FamilyInfo *f;
+  const CtorInfo *k;
+  uint64_t count = 0;
+  unsigned top = 0;
+  unsigned d;
+  int have = 0;
+  Fr cur;
+  if (blocked(m, x, OP_MERKLE, 0, 0, a, n, &out))
+    return out;
+  if (!fr_from_words(&zero[0], nothing))
+    return internal(m, "the Merkle empty leaf");
+  cur = zero[0];
+  for (;;) {
+    switch (scrut_of(x)) {
+    case SCRUT_TRAP:
+      return x;
+    case SCRUT_NEUTRAL:
+      return val_op(m, VAL_STUCK, OP_MERKLE, 0, 0, a, n);
+    case SCRUT_VALUE:
+      break;
+    }
+    if (!val_is(x, OP_CTOR) || x->inst >= m->ctor_count || m->ctors[x->inst].family >= m->family_count)
+      return internal(m, "a merkleRoot of a value that is not a FreeMon");
+    k = &m->ctors[x->inst];
+    f = &m->families[k->family];
+    if (k->field_count == 0u)
+      break;
+    if (k->field_count != 2u || x->argc != f->param_count + 2u)
+      return internal(m, "a merkleRoot of a value that is not a FreeMon");
+    if (count == ((uint64_t)1 << MERKLE_LEVELS))
+      return val_trap(m);
+    switch (scrut_of(x->args[f->param_count])) {
+    case SCRUT_TRAP:
+      return x->args[f->param_count];
+    case SCRUT_NEUTRAL:
+      return val_op(m, VAL_STUCK, OP_MERKLE, 0, 0, a, n);
+    case SCRUT_VALUE:
+      break;
+    }
+    if (!merkle_leaf(x->args[f->param_count], &cur))
+      return internal(m, "a merkleRoot leaf that is not a Digest");
+    for (d = 0; top > 0u && level[top - 1u] == d; d++) {
+      top--;
+      merkle_node(&stack[top], &cur, &cur);
+    }
+    stack[top] = cur;
+    level[top] = d;
+    top++;
+    count++;
+    x = x->args[f->param_count + 1u];
+  }
+  for (d = 0; d < MERKLE_LEVELS; d++)
+    merkle_node(&zero[d], &zero[d], &zero[d + 1u]);
+  for (d = 0; d < MERKLE_LEVELS; d++) {
+    if (top > 0u && level[top - 1u] == d) {
+      top--;
+      merkle_node(&stack[top], have ? &cur : &zero[d], &cur);
+      have = 1;
+      continue;
+    }
+    if (have)
+      merkle_node(&cur, &zero[d], &cur);
+  }
+  if (top > 0u)
+    cur = stack[top - 1u];
+  if (top == 0u && !have)
+    cur = zero[MERKLE_LEVELS];
+  fr_to_words(&cur, w);
+  for (d = 0; d < FR_WORDS; d++)
+    limbs[d] = val_nat(m, w[d]);
+  return val_op(m, VAL_OP, OP_FR, 0, 0, limbs, FR_WORDS);
+}
+
 static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, const Value *const *a, uint32_t n) {
   if (!arity_ok(m, op, inst, n))
     return internal(m, "an operation with the wrong number of arguments");
@@ -941,6 +1123,10 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_DIGEST:
+  case OP_KEY:
+  case OP_VKEY:
+  case OP_SIG:
   case OP_PROD:
   case OP_SUM:
   case OP_OPTION:
@@ -960,6 +1146,9 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_PACK:
   case OP_REFL:
   case OP_CTOR:
+  case OP_FR:
+  case OP_VKEY_WORDS:
+  case OP_SIG_WORDS:
     return val_op(m, VAL_OP, op, inst, field, a, n);
   case OP_FIRST:
     return reduce_part(m, op, a, n, OP_PAIR, 0);
@@ -1016,6 +1205,12 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
     return reduce_flag_if(m, a, n);
   case OP_PROJ:
     return reduce_proj(m, inst, field, a, n);
+  case OP_HASH:
+    return reduce_hash(m, a, n);
+  case OP_MERKLE:
+    return reduce_merkle(m, a, n);
+  case OP_FROST:
+    return reduce_frost(m, a, n);
   }
   return internal(m, "an unknown operation");
 }

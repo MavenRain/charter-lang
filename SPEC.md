@@ -335,6 +335,9 @@ An instance is a top-level definition whose type is a data type (F14).
 | `cmCarrier M` | one word. Each entry sets `M = natCMon` (Q8), thus a stream has no type argument |
 | `T M Z` | `0` for a stop; `1`, the `Z`, then the voucher list for a result |
 | `Kappa` | the member list, `thr`, `thrA`, then the `Rule` (Q-S3-1). `ruleThreshold t` is `0 t`. The `t` of the rule is not tied to `thr`: `kappaWellFormed` checks the key order, W1 and W2 only |
+| `Digest`, `Key` | 4 words: an element of the BN254 scalar field, low word first. A value that is not below the modulus r traps |
+| `VKey` | 4 words: the 32 bytes of the Ed25519 group key. Byte 8k + j of the key is byte j (from the low byte) of word k. Each word value is valid: the verify rejects a bad encoding or a pure small-order key (`[8]A = identity`) |
+| `Sig` | 8 words: the 64 bytes `R ‖ S` of the signature, in the byte order of `VKey`. Each word value is valid: the verify rejects a bad signature |
 | a function, a type, a universe (`CMon`), an `Eq` over a type that is not `ℕ` | no stream form. A def with such a parameter or result is not an entry |
 
 A scalar entry has `ℕ` or `Bool` for each parameter and for the result. It

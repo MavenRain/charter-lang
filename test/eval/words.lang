@@ -23,3 +23,33 @@ wDecide n c = ruleApply (ruleThreshold 2) n c
 
 wTree : (t : Tree) → Tree
 wTree t = t
+
+-- The hash entries (S4 U3, U5): commit, prf, chainZero, chainStep, merkleRoot,
+-- the Digest codec, and a hashOf of a trapped input that no output demands
+-- (Q-S4-11).
+wCommit : (k : Key) → Digest
+wCommit k = commit k
+
+wPrf : (k : Key) → (e : ℕ) → (u : ℕ) → Digest
+wPrf k e u = prf k e u
+
+wZero : (n : ℕ) → Digest
+wZero n = chainZero
+
+wStep : (i : ℕ) → (prev : Digest) → (opD : Digest) → (piD : Digest) → (s : Sig) → Digest
+wStep i prev opD piD s = chainStep i prev opD piD s
+
+wRoot : (xs : FreeMon Digest) → Digest
+wRoot xs = merkleRoot xs
+
+wDigest : (d : Digest) → Digest
+wDigest d = d
+
+wLazy : (xs : FreeMon ℕ) → ℕ
+wLazy xs = fmLength Digest (fold (fmNil Digest) (λ (h : ℕ) (acc : FreeMon Digest) → fmCons Digest (hashOf 3 ℕ (natAdd h 1)) acc) xs)
+
+-- frostVerify (S4 U5, Q-S4-12 (a)): RFC 8032 TEST 1 (the empty message, the
+-- 0 words of Eq ℕ 0 0) verifies; a flipped bit in z or in the key, or a key
+-- with y at or above p, does not.
+wFrost : (vk : VKey) → (s : Sig) → Bool
+wFrost vk s = frostVerify vk (Eq ℕ 0 0) refl s

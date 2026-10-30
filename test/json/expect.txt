@@ -34,6 +34,15 @@
 == TYPE_ARITY.lang exit 1
 {"code":"TYPE_ARITY","severity":"error","span":{"file":"test/json/TYPE_ARITY.lang","line":1,"col":1,"end_line":2,"end_col":17},"expected":null,"found":null,"fix":null,"retry":true,"message":"natAdd needs 2 arguments, found 1"}
 {"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}
+== TYPE_FROST.lang exit 1
+{"code":"TYPE_FROST","severity":"error","span":{"file":"test/json/TYPE_FROST.lang","line":1,"col":1,"end_line":2,"end_col":52},"expected":null,"found":null,"fix":null,"retry":true,"message":"frostVerify takes a message type with a stream form"}
+{"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}
+== TYPE_HASH.lang exit 1
+{"code":"TYPE_HASH","severity":"error","span":{"file":"test/json/TYPE_HASH.lang","line":1,"col":1,"end_line":2,"end_col":39},"expected":null,"found":null,"fix":null,"retry":true,"message":"hashOf takes a type with a stream form"}
+{"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}
+== TYPE_HASH_TAG.lang exit 1
+{"code":"TYPE_HASH_TAG","severity":"error","span":{"file":"test/json/TYPE_HASH_TAG.lang","line":1,"col":1,"end_line":2,"end_col":21},"expected":null,"found":null,"fix":null,"retry":true,"message":"hashOf takes a literal tag 1 to 5"}
+{"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}
 == TYPE_INFER.lang exit 1
 {"code":"TYPE_INFER","severity":"error","span":{"file":"test/json/TYPE_INFER.lang","line":1,"col":1,"end_line":2,"end_col":30},"expected":null,"found":null,"fix":null,"retry":true,"message":"pack needs a declared type Sigma (x : A) B here"}
 {"parsed":"1 of 1","typed":"0 of 1","laws":"0 of 0"}

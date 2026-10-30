@@ -1,0 +1,2 @@
+bad : VKey → Sig → Bool
+bad vk s = frostVerify vk (ℕ → ℕ) (λ (x : ℕ) → x) s

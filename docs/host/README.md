@@ -60,7 +60,7 @@ The parser also reads the ASCII aliases of `SPEC.md` section 2.3: `->`,
 `\`, `fun x => t`, `*`, `Sigma (x : A) B` and `Nat`. There is no text type.
 
 Core names (`BUILTINS` in `src/front/check.c`): types `ℕ` (core name
-`Nat`), `Bool Unit Sum Option Eq`, values `unit true false inl inr either
+`Nat`), `Bool Unit Digest Key Sum Option Eq`, values `unit true false inl inr either
 none some option pack witness payload pure map bind fold refl symm trans
 transport cong`, Nat operations `natAdd natSub natMul natEq natLe`, and the
 Bool eliminator `flagIf b yes no`. `Type 0 : Type 1` is the universe chain.
@@ -180,16 +180,16 @@ how the domain is organized.
 |---|---|
 | `examples: 15 checked, 0 failed` | `langc check` accepts each `examples/*.lang` file |
 | `parse refusals: 9 checked` | each `test/parse` file fails with the code in `test/parse/expect.txt`; one file has 1100 nested parentheses |
-| `check refusals: 18 checked` | each `test/check` mutant fails with the code in `test/check/expect.txt`; the `TYPE_REFL` message shows both normal forms |
+| `check refusals: 21 checked` | each `test/check` mutant fails with the code in `test/check/expect.txt`; the `TYPE_REFL` message shows both normal forms |
 | `evals: 33 checked` | `langc eval` gives each result in `test/eval/expect.txt` |
 | `ir: 15 lowered` | `langc ir` lowers each example, with one `func` for each `abi` line |
 | `wasm: 22 modules valid` | `langc build` writes a module for each example and for the 7 files `test/ir/spine.lang`, `lazy.lang`, `proof-trap.lang`, `nat-effects.lang`, `ind.lang`, `optind.lang` and `para.lang`; `wasm-validate` and `wasm-objdump -x` accept it |
 | `differential: 1094 cases, 0 mismatches` | node runs each entry on the grid of `test/grid.awk`; each result is equal to the `langc eval` result, and a trap is equal to a trap |
-| `words: 23 checked` | each line of `test/eval/words.txt` is `NAME [WORDS] => OUTPUT`; `langc eval --words test/eval/words.lang NAME WORDS` exits 0 and prints OUTPUT |
-| `stream: 8 checked` | a smoke of the stream ABI: `langc build --words` makes each program def with a stream form an entry, and `run-wasm.mjs --words` prints its output words, or `trap` |
+| `words: 39 checked` | each line of `test/eval/words.txt` is `NAME [WORDS] => OUTPUT`; `langc eval --words test/eval/words.lang NAME WORDS` exits 0 and prints OUTPUT |
+| `stream: 24 checked` | a smoke of the stream ABI: `langc build --words` makes each program def with a stream form an entry, and `run-wasm.mjs --words` prints its output words, or `trap` |
 | `entry streams: 41 rows` | each row of `test/eval/stream.txt` is `FILE NAME [WORDS]`; `langc eval --words` and the `build --words` module of `examples/node.lang` or `examples/client.lang` print the same words, and a trap is equal to a trap; each `abi --words` name of the two files has a row |
-| `fmt: 61 canonical, 3 non-canonical pairs` | `langc fmt` keeps each committed `.lang` file and each canonical `test/fmt` file the same; it is idempotent, and its output parses to the same terms; each non-canonical `test/fmt` input gives its expected canonical text |
-| `json: 21 fixtures; diagnostics: 34 codes, 18 with a fixture, 16 with no fixture` | each `test/json` fixture gives the JSON shape of its code; each fixture code is in `docs/DIAGNOSTICS.md` |
+| `fmt: 67 canonical, 3 non-canonical pairs` | `langc fmt` keeps each committed `.lang` file and each canonical `test/fmt` file the same; it is idempotent, and its output parses to the same terms; each non-canonical `test/fmt` input gives its expected canonical text |
+| `json: 24 fixtures; diagnostics: 38 codes, 21 with a fixture, 17 with no fixture` | each `test/json` fixture gives the JSON shape of its code; each fixture code is in `docs/DIAGNOSTICS.md` |
 | `gate: 0 failures` | the sum of all failures |
 
 The gate also checks the usage and IO exit codes, five `eval` refusals,
@@ -197,8 +197,13 @@ The gate also checks the usage and IO exit codes, five `eval` refusals,
 (`REFUSE_RUNTIME_TREE`), the 5 cases of `test/ir/spine.lang`,
 `pick 2 4 9` = `trap` on Wasm, and the absence of em-dashes and en-dashes.
 Then `make check` runs `test/review.sh` and the domain regressions of
-`build/fronttool`, followed by the warning fix regressions of
-`build/checktool`.
+`build/fronttool`. Then `build/checktool` prints these 8 lines:
+`poseidon2 regressions: passed` (with the HorizenLabs Poseidon2 BN254
+t = 3 vector), `poseidon2 wasm regressions: passed`,
+`hashOf eval regressions: passed`, `merkleRoot eval regressions: passed`,
+`sha512 regressions: passed`, `ed25519 regressions: passed`,
+`frost regressions: passed` (with the RFC 9591 Appendix E.1 signature) and
+`warning fix regressions: passed`.
 
 ## Known limits
 

@@ -67,8 +67,21 @@ typedef enum {
   OP_NAT_EQ,
   OP_NAT_LE,
   OP_FLAG_IF,
-  OP_PROJ
+  OP_PROJ,
+  OP_DIGEST,
+  OP_KEY,
+  OP_FR, /* an element of Fr (a Digest or a Key): 4 Nat limbs, low limb first */
+  OP_HASH, /* hashOf tag T x (Q-S4-7): the Poseidon2 digest of the stream form of x */
+  OP_MERKLE, /* merkleRoot xs (Q-S4-6): the root of the Merkle tree of 16 levels over the leaves of xs */
+  OP_VKEY, /* the type VKey (PLAN 3.3): a FROST group public key, 32 bytes */
+  OP_SIG, /* the type Sig (PLAN 3.3): a signature R || z, 64 bytes */
+  OP_VKEY_WORDS, /* a VKey value: 4 Nat words, the key bytes 8 per word, little endian, low word first */
+  OP_SIG_WORDS, /* a Sig value: 8 Nat words, in the same byte order */
+  OP_FROST /* frostVerify vk T msg sig (Q-S4-4, Q-S4-12 (a)): the cofactored RFC 8032 verify on the bytes of the stream form of msg */
 } Op;
+
+/* The words of a VKey and of a Sig value (PLAN 3.3). */
+enum { VKEY_WORDS = 4, SIG_WORDS = 8 };
 
 /* The instance of pure, map, bind and filter (formers F5 and F8). */
 typedef enum {
