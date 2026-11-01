@@ -7,7 +7,7 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S4)
+## Status (S6a)
 
 Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
 the leaf-lang surface; `langc fmt` with one canonical form per operation;
@@ -48,8 +48,22 @@ Q-S4-3); `Entry` and the hash chain step `chainStep` in
 FROST(Ed25519, SHA-512) verify with the cofactored check (Q-C1, Q-S4-12,
 Q-S4-14; verify only, Q-S4-4); a C meaning for each, and the Wasm kernels
 of `langc build` (Q-C6).
+S5: the C TFHE core `src/front/tfhe.c` (CGGI over Z/2^64, the tfhe-rs
+1.8.0 set of Q-S5-1; Q-C2); the Wasm TFHE kernels of `src/wasm.c` (the
+f64 FFT, the key switch, the modulus switch and the PBS; Q-S5-2); the
+`u64` radix of 32 blocks (Q-S5-7); the FHE circuit IR as a C circuit
+table in `src/front/fhe.c` and `langc fhe N` (Q-S5-6); the public-key
+ballot encryption of `build/tfhe-client.wasm` (Q-S5-4, Q-S5-8, Q-S5-9);
+the equation (1.1) differential on the encrypted chain at N 7 in
+`make check` (Q-S5-3, Q-S5-10).
+S6a: the key shares over the 192-bit prime field in `src/front/tshare.c`
+(Q-S6-2, Q-S6-4, Q-S6-8; n 5, t 2, Q-S6-9); the squash set to 2^128 and
+the squash PBS in `src/front/squash.c` (Q-S6-1, Q-S6-12;
+`make check-squash`, Q-S6-13); the threshold decryption with dealt flood
+noise in `src/front/tdec.c` (Q-C7, Q-S6-14, Q-S6-15), with C test keys.
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
+- MPC key generation (n 5, t 2) and masked re-encryption at enact (S6b).
 - the honest-signer part of Prop 3.4 (S8).
 - the general proofs of Invariant I and Conservation (open).
 - `skills/charter-lang/SKILL.md` with 3 to 5 graded examples (S9).
@@ -67,6 +81,7 @@ Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
 - `build/langc ir PROG` and `build/langc abi PROG`: print the IR and the
   entry names.
 - `build/langc build PROG -o OUT`: write the Wasm module.
+- `build/langc fhe N`: print the FHE circuit table at N ballots (1 to 8).
 
 ## Rules for a change
 

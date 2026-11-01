@@ -98,3 +98,12 @@ declare a data type, so the data type must be here. FreeMon replaces
 | `chainStep i prev opD piD sig` | `hashOf 1 Entry (pack i (pack prev (pack opD (pack piD sig))))`: the chain entry h_i | Q-S4-9, Q-S4-16 |
 
 The chain step h_i hashes the entry, with op_i and Pi_i as digests (Q-S4-16). The core op `merkleRoot : FreeMon Digest → Digest` (Q-S4-6) gives the root of the Merkle tree of 16 levels over a list of digests.
+
+## FHE circuits (S5)
+
+S5 adds no definition to `domain/domain.lang`. The 7 FHE circuits
+(`tally4`, `tally3`, `theta`, `settle`, `credit`, `withdraw` and `amd`) are
+a C circuit table in `src/front/fhe.c` (`docs/PLAN.md` 5.3, Q-S5-6), and
+`langc fhe N` prints it. The encrypted base types `CtA e` to `SigShare e`
+are still open (`SPEC.md` F15, Q3). S6a and S6b add the threshold
+decryption and the epoch keys at enact (`docs/PLAN.md` section 9).

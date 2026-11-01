@@ -5,7 +5,10 @@
 #include "front/ed25519.h"
 #include "front/poseidon2.h"
 #include "front/sha512.h"
+#include "front/squash.h"
+#include "front/tdec.h"
 #include "front/tfhe.h"
+#include "front/tshare.h"
 #include "wasm_kernel.h"
 
 #define main langc_main
@@ -2412,7 +2415,630 @@ static int tfhe_pke_rows(const TfheFft *f, const TfheKeys *k) {
   return ok;
 }
 
-static int tfhe_regressions(void) {
+/* Miller-Rabin of p in F_p arithmetic with the 16 prime bases 2 to 53. Also
+ * 2^13 exactly divides p - 1, w^2048 = -1 and w^4096 = 1. */
+static int tshare_prime_rows(void) {
+  static const unsigned bases[16] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53};
+  const TshareFe one = tshare_from_u64(1), minus_one = tshare_from_i64(-1);
+  uint64_t d[TSHARE_LIMBS], e[TSHARE_LIMBS] = {2048, 0, 0};
+  unsigned s = 0, k, r, i;
+  memcpy(d, minus_one.w, sizeof d);
+  while ((d[0] & 1u) == 0) {
+    for (i = 0; i + 1 < TSHARE_LIMBS; i++) d[i] = (d[i] >> 1) | (d[i + 1] << 63);
+    d[TSHARE_LIMBS - 1] >>= 1;
+    s++;
+  }
+  if (s != TSHARE_TWO_ADICITY) {
+    printf("FAIL tshare p - 1 has the factor 2^%u\n", s);
+    return 0;
+  }
+  for (k = 0; k < 16; k++) {
+    TshareFe x = tshare_pow(tshare_from_u64(bases[k]), d);
+    if (tshare_eq(x, one) || tshare_eq(x, minus_one)) continue;
+    for (r = 1; r < s; r++) {
+      x = tshare_mul(x, x);
+      if (tshare_eq(x, minus_one)) break;
+    }
+    if (r == s) {
+      printf("FAIL tshare miller-rabin base %u\n", bases[k]);
+      return 0;
+    }
+  }
+  if (!tshare_eq(tshare_pow(tshare_root(), e), minus_one)) {
+    puts("FAIL tshare w^2048");
+    return 0;
+  }
+  e[0] = 4096;
+  if (!tshare_eq(tshare_pow(tshare_root(), e), one)) {
+    puts("FAIL tshare w^4096");
+    return 0;
+  }
+  return 1;
+}
+
+/* The edges (p - 1)^2 = 1 and 0 - (p - 1) = 1. On random values: a / a = 1,
+ * (a + b) c = a c + b c, (a - b) + b = a, and the root of a^2 is a or -a.
+ * 3 is not a square, and the root of 0 is 0. */
+static int tshare_field_rows(TfheDrbg *d) {
+  const TshareFe one = tshare_from_u64(1), zero = tshare_from_u64(0), minus_one = tshare_from_i64(-1);
+  TshareFe root;
+  unsigned i;
+  if (!tshare_eq(tshare_mul(minus_one, minus_one), one) || !tshare_eq(tshare_sub(zero, minus_one), one)) {
+    puts("FAIL tshare field edges");
+    return 0;
+  }
+  for (i = 0; i < 256; i++) {
+    TshareFe a = tshare_random(d), b = tshare_random(d), c = tshare_random(d), square = tshare_mul(a, a);
+    if (!tshare_eq(tshare_mul(a, tshare_inverse(a)), one)) {
+      puts("FAIL tshare inverse");
+      return 0;
+    }
+    if (!tshare_eq(tshare_mul(tshare_add(a, b), c), tshare_add(tshare_mul(a, c), tshare_mul(b, c)))) {
+      puts("FAIL tshare distributive law");
+      return 0;
+    }
+    if (!tshare_eq(tshare_add(tshare_sub(a, b), b), a)) {
+      puts("FAIL tshare sub");
+      return 0;
+    }
+    if (!tshare_sqrt(&root, square) || !(tshare_eq(root, a) || tshare_eq(root, tshare_sub(zero, a)))) {
+      puts("FAIL tshare square root");
+      return 0;
+    }
+  }
+  if (tshare_sqrt(&root, tshare_from_u64(3))) {
+    puts("FAIL tshare root of 3");
+    return 0;
+  }
+  if (!tshare_sqrt(&root, zero) || !tshare_eq(root, zero)) {
+    puts("FAIL tshare root of 0");
+    return 0;
+  }
+  return 1;
+}
+
+/* The NTT product against the schoolbook negacyclic product on random
+ * operands; the inverse NTT round trip; and output aliases of each input. */
+static int tshare_ntt_rows(TfheDrbg *d) {
+  static TshareNtt t;
+  static TshareFe a[TSHARE_N], b[TSHARE_N], want[TSHARE_N], got[TSHARE_N];
+  unsigned i, j;
+  tshare_ntt_init(&t);
+  for (j = 0; j < TSHARE_N; j++) {
+    a[j] = tshare_random(d);
+    b[j] = tshare_random(d);
+  }
+  for (i = 0; i < TSHARE_N; i++) {
+    TshareFe acc = tshare_from_u64(0);
+    for (j = 0; j <= i; j++) acc = tshare_add(acc, tshare_mul(a[j], b[i - j]));
+    for (j = i + 1; j < TSHARE_N; j++) acc = tshare_sub(acc, tshare_mul(a[j], b[TSHARE_N + i - j]));
+    want[i] = acc;
+  }
+  tshare_poly_mul(&t, got, a, b);
+  for (i = 0; i < TSHARE_N; i++) {
+    if (!tshare_eq(got[i], want[i])) {
+      printf("FAIL tshare ntt product %u\n", i);
+      return 0;
+    }
+  }
+  memcpy(got, a, sizeof got);
+  tshare_ntt_forward(&t, got);
+  tshare_ntt_inverse(&t, got);
+  for (i = 0; i < TSHARE_N; i++) {
+    if (!tshare_eq(got[i], a[i])) {
+      printf("FAIL tshare ntt round trip %u\n", i);
+      return 0;
+    }
+  }
+  for (j = 0; j < 2; j++) {
+    memcpy(got, j == 0 ? a : b, sizeof got);
+    tshare_poly_mul(&t, got, j == 0 ? got : a, j == 0 ? b : got);
+    for (i = 0; i < TSHARE_N; i++) {
+      if (!tshare_eq(got[i], want[i])) {
+        printf("FAIL tshare ntt alias input %u coefficient %u\n", j, i);
+        return 0;
+      }
+    }
+  }
+  memset(got, 0, sizeof got);
+  got[0] = tshare_from_u64(1);
+  got[TSHARE_N - 1] = tshare_from_u64(2);
+  tshare_poly_mul(&t, got, got, got);
+  for (i = 0; i < TSHARE_N; i++) {
+    TshareFe square = tshare_from_i64(i == 0 ? 1 : i == TSHARE_N - 2 ? -4 : i == TSHARE_N - 1 ? 4 : 0);
+    if (!tshare_eq(got[i], square)) {
+      printf("FAIL tshare ntt in-place square %u\n", i);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+/* (1.3) The S5 small key bits, lifted to F_p and shared. Each of the 16
+ * subsets of 3, 4 or 5 parties gives the key. For each of the 10 sets of 2
+ * parties, the combine refuses the set, and the interpolation at 0 gives no
+ * key coordinate. A changed share fails its commitment at the combine; a
+ * subset without that party still gives the key. */
+static int tshare_key_rows(const uint64_t small_key[TFHE_LWE_N], TfheDrbg *d) {
+  static TshareFe key[TFHE_LWE_N], shares[TSHARE_PARTIES * TFHE_LWE_N], got[TFHE_LWE_N];
+  static const unsigned changed[3] = {1, 2, 3}, other[3] = {1, 3, 4};
+  uint8_t commits[TSHARE_PARTIES][SHA512_BYTES];
+  unsigned mask, i, m, large = 0, pairs = 0;
+  size_t j;
+  for (j = 0; j < TFHE_LWE_N; j++) key[j] = tshare_from_u64(small_key[j]);
+  tshare_share(shares, key, TFHE_LWE_N, d);
+  for (i = 0; i < TSHARE_PARTIES; i++) tshare_commit(commits[i], i + 1, shares + (size_t)i * TFHE_LWE_N, TFHE_LWE_N);
+  for (mask = 1; mask < (1u << TSHARE_PARTIES); mask++) {
+    unsigned subset[TSHARE_PARTIES];
+    TshareFe lambda[TSHARE_PARTIES];
+    size_t equal = 0;
+    m = 0;
+    for (i = 0; i < TSHARE_PARTIES; i++) {
+      if ((mask >> i) & 1u) subset[m++] = i + 1;
+    }
+    if (m > TSHARE_THRESHOLD) {
+      if (!tshare_combine(got, shares, TFHE_LWE_N, subset, m, commits) || memcmp(got, key, sizeof key) != 0) {
+        printf("FAIL tshare key from set %u\n", mask);
+        return 0;
+      }
+      large++;
+    }
+    if (m == TSHARE_THRESHOLD) {
+      if (tshare_combine(got, shares, TFHE_LWE_N, subset, m, commits) || !tshare_lagrange(lambda, subset, m)) {
+        printf("FAIL tshare set of 2 %u\n", mask);
+        return 0;
+      }
+      for (j = 0; j < TFHE_LWE_N; j++) {
+        TshareFe acc = tshare_from_u64(0);
+        for (i = 0; i < m; i++) acc = tshare_add(acc, tshare_mul(lambda[i], shares[(size_t)(subset[i] - 1) * TFHE_LWE_N + j]));
+        equal += tshare_eq(acc, key[j]);
+      }
+      if (equal != 0) {
+        printf("FAIL tshare set of 2 %u gives %u key coordinates\n", mask, (unsigned)equal);
+        return 0;
+      }
+      pairs++;
+    }
+  }
+  if (large != 16 || pairs != 10) {
+    printf("FAIL tshare subsets %u and %u\n", large, pairs);
+    return 0;
+  }
+  shares[TFHE_LWE_N] = tshare_add(shares[TFHE_LWE_N], tshare_from_u64(1));
+  if (tshare_combine(got, shares, TFHE_LWE_N, changed, 3, commits)) {
+    puts("FAIL tshare changed share");
+    return 0;
+  }
+  if (!tshare_combine(got, shares, TFHE_LWE_N, other, 3, commits) || memcmp(got, key, sizeof key) != 0) {
+    puts("FAIL tshare set without the changed share");
+    return 0;
+  }
+  return 1;
+}
+
+static int tshare_regressions(const uint64_t small_key[TFHE_LWE_N]) {
+  static const char seed[] = "charter-lang S6 U1 tshare seeds.";
+  TfheDrbg d;
+  int ok;
+  tfhe_drbg_init(&d, (const uint8_t *)seed);
+  ok = tshare_prime_rows();
+  ok &= tshare_field_rows(&d);
+  ok &= tshare_ntt_rows(&d);
+  ok &= tshare_key_rows(small_key, &d);
+  return ok;
+}
+
+static Squash128 squash_row_word(uint64_t hi, uint64_t lo) {
+  Squash128 r;
+  r.hi = hi;
+  r.lo = lo;
+  return r;
+}
+
+/* |P - M 2^123| over Z/2^128. */
+static Squash128 squash_row_error(Squash128 p, unsigned m) {
+  Squash128 e = squash_sub(p, squash_shl(squash_from_u64(m), SQUASH_DELTA_LOG));
+  return e.hi >> 63 ? squash_neg(e) : e;
+}
+
+/* The first J with X[j] different from Y[j], or N when the N words are equal. */
+static unsigned squash_row_diff(const Squash128 *x, const Squash128 *y, unsigned n) {
+  unsigned j = 0;
+  while (j < n && squash_eq(x[j], y[j])) j++;
+  return j;
+}
+
+/* The words of the noise squashing (front/squash.h). The u128 operations give
+ * 9 fixed values. 4096 decompositions (the tie 2^55 and -1 are 2 of them) give
+ * digits in [-2^23, 2^23], and the sum of the digits is within 2^55 of the
+ * word. A GLWE of 2048 messages of 4 bits decrypts with a noise below 2^31.
+ * For r 0 and 1, GGSW(r) x GLWE decrypts to r m. For r 1, the external
+ * product is equal to the schoolbook rule on the same digits. Then 256 random
+ * u128 identities. The f64 and NTT products are equal to the schoolbook rule
+ * on one random product, and the f64 product is equal on a binary b. */
+static int squash_regressions(void) {
+  static const char seed[] = "charter-lang S6 U2a2 squash seed";
+  static TfheFft f;
+  static TshareNtt t;
+  static SquashKey k;
+  static SquashFftWork w;
+  static SquashExtWork x;
+  static SquashNttWork nw;
+  static Squash128 m[SQUASH_POLY_N], p[SQUASH_POLY_N], a[SQUASH_POLY_N], want[SQUASH_POLY_N], got[SQUASH_POLY_N];
+  static Squash128 ct[SQUASH_GLWE_WORDS], out[SQUASH_GLWE_WORDS], ref[SQUASH_GLWE_WORDS], g[SQUASH_GGSW_WORDS];
+  static unsigned msg[SQUASH_POLY_N];
+  static int64_t b[SQUASH_POLY_N];
+  const Squash128 one = squash_from_u64(1);
+  const int fixed[9] = {
+      squash_eq(squash_add(squash_row_word(0, ~0ull), one), squash_row_word(1, 0)),
+      squash_eq(squash_sub(squash_from_u64(0), one), squash_row_word(~0ull, ~0ull)),
+      squash_eq(squash_neg(one), squash_from_i64(-1)),
+      squash_eq(squash_mul(squash_row_word(1, 3), squash_row_word(1, 5)), squash_row_word(8, 15)),
+      squash_eq(squash_mul(squash_row_word(0, ~0ull), squash_row_word(0, ~0ull)), squash_row_word(~0ull - 1, 1)),
+      squash_eq(squash_shl(one, 127), squash_row_word(1ull << 63, 0)),
+      squash_eq(squash_shl(squash_row_word(0, 0x8000000000000001ull), 1), squash_row_word(1, 2)),
+      squash_eq(squash_shr(squash_row_word(1ull << 63, 0), 127), one),
+      squash_eq(squash_shr(squash_row_word(1, 2), 1), squash_row_word(0, 0x8000000000000001ull))};
+  int64_t digits[SQUASH_LEVEL];
+  TfheDrbg d;
+  unsigned r, j, q, i, l;
+  tfhe_drbg_init(&d, (const uint8_t *)seed);
+  tfhe_fft_init(&f);
+  tshare_ntt_init(&t);
+  for (r = 0; r < 9; r++) {
+    if (!fixed[r]) {
+      printf("FAIL squash u128 value %u\n", r);
+      return 0;
+    }
+  }
+  for (r = 0; r < 4096; r++) {
+    Squash128 v = squash_uniform(&d), s = squash_from_u64(0), e;
+    if (r == 0) v = squash_shl(one, 55);
+    if (r == 1) v = squash_from_i64(-1);
+    squash_decompose(digits, v);
+    for (l = 0; l < SQUASH_LEVEL; l++) {
+      if (digits[l] < -(1 << 23) || digits[l] > (1 << 23)) {
+        printf("FAIL squash digit range %u\n", r);
+        return 0;
+      }
+      s = squash_add(s, squash_mul(squash_from_i64(digits[l]), squash_shl(one, 104u - 24u * l)));
+    }
+    e = squash_sub(v, s);
+    if (e.hi >> 63) e = squash_neg(e);
+    if (e.hi != 0 || e.lo > (1ull << 55)) {
+      printf("FAIL squash closest decomposition %u\n", r);
+      return 0;
+    }
+  }
+  squash_key_generate(&k, &d);
+  for (j = 0; j < SQUASH_POLY_N; j++) {
+    msg[j] = (unsigned)(tfhe_uniform(&d) & 15u);
+    m[j] = squash_shl(squash_from_u64(msg[j]), SQUASH_DELTA_LOG);
+  }
+  squash_glwe_encrypt(&f, &w, ct, &k, m, &d);
+  squash_glwe_phase(&f, &w, p, ct, &k);
+  for (j = 0; j < SQUASH_POLY_N; j++) {
+    Squash128 e = squash_row_error(p[j], msg[j]);
+    if (e.hi != 0 || (e.lo >> 31) != 0) {
+      printf("FAIL squash glwe decrypt %u\n", j);
+      return 0;
+    }
+  }
+  /* The last pass (r 1) keeps GGSW(1), the digits and the product for the
+   * schoolbook rule. */
+  for (r = 0; r < 2; r++) {
+    squash_ggsw_encrypt(&f, &w, g, &k, (int64_t)r, &d);
+    squash_external_product(&f, &x, out, g, ct);
+    squash_glwe_phase(&f, &w, p, out, &k);
+    for (j = 0; j < SQUASH_POLY_N; j++) {
+      if ((squash_row_error(p[j], r * msg[j]).hi >> 58) != 0) {
+        printf("FAIL squash external product decrypt %u %u\n", r, j);
+        return 0;
+      }
+    }
+  }
+  memset(ref, 0, sizeof ref);
+  for (q = 0; q < SQUASH_GGSW_ROWS; q++) {
+    for (i = 0; i <= SQUASH_GLWE_K; i++) {
+      squash_poly_mul_exact(want, g + ((size_t)q * (SQUASH_GLWE_K + 1) + i) * SQUASH_POLY_N, x.digit[q]);
+      for (j = 0; j < SQUASH_POLY_N; j++) ref[i * SQUASH_POLY_N + j] = squash_add(ref[i * SQUASH_POLY_N + j], want[j]);
+    }
+  }
+  j = squash_row_diff(out, ref, SQUASH_GLWE_WORDS);
+  if (j < SQUASH_GLWE_WORDS) {
+    printf("FAIL squash external product %u\n", j);
+    return 0;
+  }
+  for (r = 0; r < 256; r++) {
+    Squash128 u = squash_uniform(&d), v = squash_uniform(&d), z = squash_uniform(&d);
+    if (!squash_eq(squash_mul(u, squash_add(v, z)), squash_add(squash_mul(u, v), squash_mul(u, z))) ||
+        !squash_eq(squash_sub(squash_add(u, v), v), u) || !squash_eq(squash_mul(u, squash_from_u64(8)), squash_shl(u, 3))) {
+      printf("FAIL squash u128 identity %u\n", r);
+      return 0;
+    }
+  }
+  for (j = 0; j < SQUASH_POLY_N; j++) {
+    a[j] = squash_uniform(&d);
+    b[j] = (int64_t)tfhe_tuniform(&d, SQUASH_SMALL_LOG);
+  }
+  b[0] = 1 << SQUASH_SMALL_LOG;
+  b[1] = -(1 << SQUASH_SMALL_LOG);
+  squash_poly_mul_exact(want, a, b);
+  squash_poly_mul_fft(&f, &w, got, a, b);
+  j = squash_row_diff(got, want, SQUASH_POLY_N);
+  if (j < SQUASH_POLY_N) {
+    printf("FAIL squash fft product %u\n", j);
+    return 0;
+  }
+  squash_poly_mul_ntt(&t, &nw, got, a, b);
+  j = squash_row_diff(got, want, SQUASH_POLY_N);
+  if (j < SQUASH_POLY_N) {
+    printf("FAIL squash ntt product %u\n", j);
+    return 0;
+  }
+  for (j = 0; j < SQUASH_POLY_N; j++) b[j] = (int64_t)(tfhe_uniform(&d) & 1u);
+  squash_poly_mul_exact(want, a, b);
+  squash_poly_mul_fft(&f, &w, got, a, b);
+  j = squash_row_diff(got, want, SQUASH_POLY_N);
+  if (j < SQUASH_POLY_N) {
+    printf("FAIL squash fft product of a binary b %u\n", j);
+    return 0;
+  }
+  return 1;
+}
+
+/* OUT = X^(-R) IN mod (X^N + 1), R < 2N: coefficient j is IN[j + R], with
+ * the sign -1 for each pass of N. */
+static void squash_row_rotate(Squash128 out[SQUASH_POLY_N], const Squash128 in[SQUASH_POLY_N], unsigned r) {
+  unsigned j;
+  for (j = 0; j < SQUASH_POLY_N; j++) {
+    unsigned k = j + r;
+    out[j] = k < SQUASH_POLY_N        ? in[k]
+             : k < 2u * SQUASH_POLY_N ? squash_neg(in[k - SQUASH_POLY_N])
+                                      : in[k - 2u * SQUASH_POLY_N];
+  }
+}
+
+/* The parts of the squash PBS (front/squash.h, U2b) without the 812 MB BSK;
+ * `make check-squash` runs the full squash PBS (Q-S6-13). The LUT: box m
+ * holds m 2^123, then the polynomial is multiplied by X^(-64). The LWE phase
+ * of the sample extract of a random GLWE is coefficient 0 of its GLWE phase.
+ * With a mask of 0 (no CMux), the blind rotation gives the trivial GLWE of
+ * X^(-b) LUT for 10 values of b in [0, 2N), b >= N included. Over a BSK of 4
+ * GGSW (a_i = 0 for i >= 4), the blind rotation decrypts to X^(-r) LUT with
+ * r = b - sum a_i s_i mod 2N and a noise below 2^90. */
+static int squash_pbs_regressions(void) {
+  static const char seed[] = "charter-lang S6 U2b2 squash rows";
+  static TfheFft f;
+  static SquashKey k;
+  static SquashFftWork w;
+  static SquashPbsWork pw;
+  static Squash128 lut[SQUASH_POLY_N], m[SQUASH_POLY_N], p[SQUASH_POLY_N], want[SQUASH_POLY_N];
+  static Squash128 ct[SQUASH_GLWE_WORDS], out[SQUASH_BIG_N + 1], zero[SQUASH_GLWE_K * SQUASH_POLY_N];
+  static uint64_t sw[TFHE_LWE_N + 1];
+  const unsigned box = SQUASH_POLY_N / TFHE_PLAIN, half = box / 2u;
+  const unsigned bs[10] = {0, 1, 63, 64, 384, SQUASH_POLY_N - 1, SQUASH_POLY_N, SQUASH_POLY_N + 64,
+                           SQUASH_POLY_N + 384, 2 * SQUASH_POLY_N - 1};
+  const int64_t s[4] = {1, 0, 1, 1};
+  SquashBsk bsk;
+  Squash128 e;
+  TfheDrbg d;
+  unsigned i, j, r;
+  tfhe_drbg_init(&d, (const uint8_t *)seed);
+  tfhe_fft_init(&f);
+  squash_lut(lut);
+  for (i = 0; i < SQUASH_POLY_N; i++) {
+    Squash128 v = squash_shl(squash_from_u64(i / box), SQUASH_DELTA_LOG);
+    j = i >= half ? i - half : i + SQUASH_POLY_N - half;
+    if (!squash_eq(lut[j], i >= half ? v : squash_neg(v))) {
+      printf("FAIL squash lut %u\n", j);
+      return 0;
+    }
+  }
+  squash_key_generate(&k, &d);
+  for (j = 0; j < SQUASH_POLY_N; j++) m[j] = squash_uniform(&d);
+  squash_glwe_encrypt(&f, &w, ct, &k, m, &d);
+  squash_glwe_phase(&f, &w, p, ct, &k);
+  squash_sample_extract(out, ct);
+  e = out[SQUASH_BIG_N];
+  for (i = 0; i < SQUASH_GLWE_K; i++)
+    for (j = 0; j < SQUASH_POLY_N; j++)
+      if (k.s[i][j] != 0) e = squash_sub(e, out[i * SQUASH_POLY_N + j]);
+  if (!squash_eq(e, p[0])) {
+    puts("FAIL squash sample extract phase");
+    return 0;
+  }
+  memset(sw, 0, sizeof sw);
+  bsk.ggsw = NULL;
+  for (r = 0; r < 10; r++) {
+    sw[TFHE_LWE_N] = bs[r];
+    squash_blind_rotate(&f, &pw, sw, lut, &bsk);
+    squash_row_rotate(want, lut, bs[r]);
+    if (squash_row_diff(pw.acc, zero, SQUASH_GLWE_K * SQUASH_POLY_N) < SQUASH_GLWE_K * SQUASH_POLY_N ||
+        squash_row_diff(pw.acc + SQUASH_GLWE_K * SQUASH_POLY_N, want, SQUASH_POLY_N) < SQUASH_POLY_N) {
+      printf("FAIL squash blind rotation with a mask of 0, b %u\n", bs[r]);
+      return 0;
+    }
+  }
+  bsk.ggsw = malloc((size_t)4 * SQUASH_GGSW_WORDS * sizeof bsk.ggsw[0]);
+  if (bsk.ggsw == NULL) {
+    puts("FAIL squash partial bsk");
+    return 0;
+  }
+  for (i = 0; i < 4; i++) squash_ggsw_encrypt(&f, &w, bsk.ggsw + (size_t)i * SQUASH_GGSW_WORDS, &k, s[i], &d);
+  r = (unsigned)(tfhe_uniform(&d) % (2u * SQUASH_POLY_N));
+  sw[TFHE_LWE_N] = r;
+  for (i = 0; i < 4; i++) {
+    sw[i] = tfhe_uniform(&d) % (2u * SQUASH_POLY_N);
+    if (s[i] != 0) r = (r + 2u * SQUASH_POLY_N - (unsigned)sw[i]) % (2u * SQUASH_POLY_N);
+  }
+  squash_blind_rotate(&f, &pw, sw, lut, &bsk);
+  free(bsk.ggsw);
+  squash_glwe_phase(&f, &w, p, pw.acc, &k);
+  squash_row_rotate(want, lut, r);
+  for (j = 0; j < SQUASH_POLY_N; j++) {
+    e = squash_sub(p[j], want[j]);
+    if (e.hi >> 63) e = squash_neg(e);
+    if ((e.hi >> 26) != 0) {
+      printf("FAIL squash blind rotation over 4 GGSW %u\n", j);
+      return 0;
+    }
+  }
+  return 1;
+}
+
+
+/* Threshold decryption of (MASK, BODY) by the M parties in SUBSET (U3). The
+ * test dealer gave the key shares SHARES (party i holds the 4096 values at
+ * (i - 1) 4096); each party in SUBSET also deals a flood noise. */
+static int tdec_run(Squash128 *phase, TshareFe *partial, const TshareFe *shares, const Squash128 *mask, Squash128 body,
+                    const unsigned *subset, unsigned m, TfheDrbg *d) {
+  static TshareFe noise[TSHARE_PARTIES * TSHARE_PARTIES];
+  unsigned i;
+  for (i = 0; i < m; i++) tdec_flood(noise + i * TSHARE_PARTIES, d);
+  for (i = 0; i < m; i++)
+    partial[i] = tdec_partial(shares + (size_t)(subset[i] - 1) * SQUASH_BIG_N, mask, noise, m, subset[i]);
+  return tdec_combine(phase, body, partial, subset, m);
+}
+
+/* A squash LWE of V: a uniform mask, body = <a, s> + V Delta_128 + e with
+ * e = 2^66 - 1 for an even V and -(2^66 - 1) for an odd V (the U2b bound). */
+static Squash128 tdec_lwe(Squash128 mask[SQUASH_BIG_N], const SquashKey *k, unsigned v, TfheDrbg *d) {
+  Squash128 e = squash_sub(squash_shl(squash_from_u64(1), 66), squash_from_u64(1));
+  Squash128 b = squash_add(squash_shl(squash_from_u64(v), SQUASH_DELTA_LOG), (v & 1u) ? squash_neg(e) : e);
+  unsigned j;
+  for (j = 0; j < SQUASH_BIG_N; j++) {
+    mask[j] = squash_uniform(d);
+    if (k->s[j / SQUASH_POLY_N][j % SQUASH_POLY_N] != 0) b = squash_add(b, mask[j]);
+  }
+  return b;
+}
+
+/* 1 when the integer of V (V - p above (p - 1) / 2) is in (-5 2^106, 5 2^106). */
+static int tdec_small(TshareFe v) {
+  TshareFe n = tshare_sub(tshare_from_u64(0), v);
+  return (v.w[2] == 0 && v.w[1] < (5ull << 42)) || (n.w[2] == 0 && n.w[1] < (5ull << 42));
+}
+
+/* The threshold decryption (front/tdec.h, U3) under a test dealer of the
+ * squash key: the messages 0 to 15 with S = {1, ..., 5}, one message for
+ * each of the 10 sets of 3, and the blocks of p = 0x123456789ABCDEF0. The
+ * combine of shared known values gives the exact phase (the centered lift at
+ * (p - 1) / 2). A set of 2, a bad set, and one changed partial give no phase.
+ * The flood row: the value at 0 minus the clear <a, s> is E, not 0, with
+ * |E| below 5 2^106. The flood sign row: the shares of a flood noise e give
+ * e at 0 for e >= 0 and p - |e| for e < 0. */
+static int tdec_regressions(void) {
+  static const char seed[] = "charter-lang S6 U3 tdec seed!!!!";
+  static SquashKey k;
+  static TshareFe key[SQUASH_BIG_N], shares[TSHARE_PARTIES * SQUASH_BIG_N];
+  static Squash128 mask[SQUASH_BIG_N];
+  static const unsigned all[TSHARE_PARTIES] = {1, 2, 3, 4, 5};
+  static const unsigned bad[4] = {1, 2, 3, 1};
+  const uint64_t p = 0x123456789ABCDEF0u;
+  TshareFe partial[TSHARE_PARTIES], x[TSHARE_PARTIES], lambda[3], v0, e, hp;
+  TshareFe known[4];
+  Squash128 want[4], body, ph, fu, fe;
+  unsigned subset[3], i, j, a, b, c, v, n = 0, neg = 0, sgn;
+  uint64_t got = 0;
+  TfheDrbg d, dc;
+  int ok = 1;
+  tfhe_drbg_init(&d, (const uint8_t *)seed);
+  squash_key_generate(&k, &d);
+  for (j = 0; j < SQUASH_BIG_N; j++) key[j] = tshare_from_u64((uint64_t)k.s[j / SQUASH_POLY_N][j % SQUASH_POLY_N]);
+  tshare_share(shares, key, SQUASH_BIG_N, &d);
+
+  /* (1.3) v 0 to 15, S = {1, ..., 5}. */
+  for (v = 0; v < 16; v++) {
+    body = tdec_lwe(mask, &k, v, &d);
+    ok &= tdec_run(&ph, partial, shares, mask, body, all, TSHARE_PARTIES, &d) && tdec_decode(ph) == v;
+  }
+  /* The 10 sets of 3: set n decodes v = n. */
+  for (a = 1; a <= 3; a++)
+    for (b = a + 1; b <= 4; b++)
+      for (c = b + 1; c <= 5; c++) {
+        subset[0] = a;
+        subset[1] = b;
+        subset[2] = c;
+        body = tdec_lwe(mask, &k, n, &d);
+        ok &= tdec_run(&ph, partial, shares, mask, body, subset, 3, &d) && tdec_decode(ph) == n;
+        n++;
+      }
+  ok &= n == 10;
+  /* The blocks of p (the 2-bit digits), S = {1, ..., 5}. */
+  for (i = 0; i < 32; i++) {
+    body = tdec_lwe(mask, &k, (unsigned)(p >> (2u * i)) & 3u, &d);
+    ok &= tdec_run(&ph, partial, shares, mask, body, all, TSHARE_PARTIES, &d);
+    got |= (uint64_t)(tdec_decode(ph) & 3u) << (2u * i);
+  }
+  ok &= got == p;
+
+  /* No phase: a set of 2, a bad set, one changed partial of a set of 4 or 5. */
+  body = tdec_lwe(mask, &k, 7, &d);
+  ok &= !tdec_run(&ph, partial, shares, mask, body, all, 2, &d);
+  ok &= !tdec_run(&ph, partial, shares, mask, body, bad, 4, &d);
+  ok &= tdec_run(&ph, partial, shares, mask, body, all, 4, &d) && tdec_decode(ph) == 7;
+  for (i = 0; i < 4; i++) {
+    partial[i] = tshare_add(partial[i], tshare_from_u64(1));
+    ok &= !tdec_combine(&ph, body, partial, all, 4);
+    partial[i] = tshare_sub(partial[i], tshare_from_u64(1));
+  }
+  ok &= tdec_combine(&ph, body, partial, all, 4) && tdec_decode(ph) == 7;
+  ok &= tdec_run(&ph, partial, shares, mask, body, all, TSHARE_PARTIES, &d);
+  partial[4] = tshare_add(partial[4], tshare_from_u64(1));
+  ok &= !tdec_combine(&ph, body, partial, all, TSHARE_PARTIES);
+
+  /* The exact phase for the shared values 5, -5, (p - 1) / 2 and
+   * (p + 1) / 2 (the integer -(p - 1) / 2), with body 0. (p - 1) / 2 is
+   * 2^128 - 626688 mod 2^128. */
+  hp = tshare_inverse(tshare_from_u64(2));
+  known[0] = tshare_from_u64(5);
+  known[1] = tshare_from_i64(-5);
+  known[2] = tshare_sub(hp, tshare_from_u64(1));
+  known[3] = hp;
+  want[0] = squash_neg(squash_from_u64(5));
+  want[1] = squash_from_u64(5);
+  want[2] = squash_from_u64(626688);
+  want[3] = squash_neg(squash_from_u64(626688));
+  for (i = 0; i < 4; i++) {
+    tshare_share(x, known + i, 1, &d);
+    ok &= tdec_combine(&ph, squash_from_u64(0), x, all, TSHARE_PARTIES) && squash_eq(ph, want[i]);
+  }
+
+  /* The flood row: E = V0 - <a, s> over F_p (V0 over the parties 1 to 3). */
+  ok &= tdec_run(&ph, partial, shares, mask, body, all, TSHARE_PARTIES, &d) && tshare_lagrange(lambda, all, 3);
+  v0 = tshare_from_u64(0);
+  for (i = 0; i < 3; i++) v0 = tshare_add(v0, tshare_mul(lambda[i], partial[i]));
+  e = tshare_sub(v0, tdec_mask_product(key, mask));
+  ok &= !tshare_eq(e, tshare_from_u64(0)) && tdec_small(e);
+
+  /* The flood sign row: for 8 noises, a copy of the DRBG gives the 2 words
+   * of tdec_flood, so e = u - 2^106. The value at 0 of the shares of the
+   * parties 1 to 3 is e for e >= 0, and p - |e| (value + |e| = 0) for
+   * e < 0. The 8 noises have the two signs. */
+  ok &= tshare_lagrange(lambda, all, 3);
+  for (i = 0; i < 8; i++) {
+    dc = d;
+    fu.lo = tfhe_uniform(&dc);
+    fu.hi = tfhe_uniform(&dc) & ((1ull << (TDEC_FLOOD_LOG + 1 - 64)) - 1u);
+    fe = squash_sub(fu, squash_shl(squash_from_u64(1), TDEC_FLOOD_LOG));
+    tdec_flood(x, &d);
+    v0 = tshare_from_u64(0);
+    for (j = 0; j < 3; j++) v0 = tshare_add(v0, tshare_mul(lambda[j], x[j]));
+    sgn = (unsigned)(fe.hi >> 63);
+    fe = sgn ? squash_neg(fe) : fe;
+    e.w[0] = fe.lo;
+    e.w[1] = fe.hi;
+    e.w[2] = 0;
+    ok &= sgn ? tshare_eq(tshare_add(v0, e), tshare_from_u64(0)) : tshare_eq(v0, e);
+    neg += sgn;
+  }
+  ok &= neg > 0 && neg < 8;
+  return ok;
+}
+
+/* Also writes the small key to SMALL_KEY for the tshare rows. */
+static int tfhe_regressions(uint64_t small_key[TFHE_LWE_N]) {
   static const char seed[] = "charter-lang S5 U1 tfhe test key";
   TfheFft f;
   TfheKeys k;
@@ -2424,6 +3050,7 @@ static int tfhe_regressions(void) {
     puts("FAIL tfhe keys");
     return 0;
   }
+  memcpy(small_key, k.lwe_key, sizeof k.lwe_key);
   ok = tfhe_tuniform_rows(&d);
   ok &= tfhe_fft_rows(&f, &k, &d);
   ok &= tfhe_pbs_rows(&f, &k, &d);
@@ -2471,9 +3098,22 @@ int main(int argc, char **argv) {
   int frost = frost_regressions();
   if (frost) puts("frost regressions: passed");
   ok &= frost;
-  int fhe = tfhe_regressions();
+  uint64_t small_key[TFHE_LWE_N] = {0};
+  int fhe = tfhe_regressions(small_key);
   if (fhe) puts("tfhe regressions: passed");
   ok &= fhe;
+  int shared = tshare_regressions(small_key);
+  if (shared) puts("tshare regressions: passed");
+  ok &= shared;
+  int squashed = squash_regressions();
+  if (squashed) puts("squash regressions: passed");
+  ok &= squashed;
+  int pbs_squashed = squash_pbs_regressions();
+  if (pbs_squashed) puts("squash pbs regressions: passed");
+  ok &= pbs_squashed;
+  int tdec_ok = tdec_regressions();
+  if (tdec_ok) puts("tdec regressions: passed");
+  ok &= tdec_ok;
   if (ok) puts("warning fix regressions: passed");
   return ok ? 0 : 1;
 }

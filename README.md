@@ -7,9 +7,9 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S4)
+## Status (S6a)
 
-S1, S2a, S2b, S2c, S2d, S3 and S4 are built. The front end has the leaf-lang surface. `langc fmt`
+S1, S2a, S2b, S2c, S2d, S3, S4, S5 and S6a are built. The front end has the leaf-lang surface. `langc fmt`
 prints the one canonical form, and `langc check --json` gives a JSON
 diagnostic with a fix hint and the counts parsed, typed and laws (the law
 definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
@@ -79,6 +79,34 @@ Poseidon2, SHA-512 and Ed25519 (Q-C6). The gate checks the published
 vectors: the HorizenLabs Poseidon2 BN254 t = 3 vector and the RFC 9591
 Appendix E.1 signature.
 
+S5 adds the TFHE runtime and the FHE circuit IR. `src/front/tfhe.c` has
+the C TFHE core: CGGI over the torus Z/2^64 with the tfhe-rs 1.8.0 set
+`V1_4_PARAM_MESSAGE_2_CARRY_2_KS_PBS_TUNIFORM_2M128` (n 918, N 2048,
+TUniform noise; Q-C2, Q-S5-1). `src/wasm.c` emits the Wasm TFHE kernels:
+the negacyclic f64 FFT (Q-S5-2), the key switch, the modulus switch, the
+blind rotation and the PBS. An encrypted value of `A` is a `u64` radix of
+32 blocks of 2-bit message and 2-bit carry (Q-S5-7). `src/front/fhe.c`
+gives the FHE circuit IR (`docs/PLAN.md` 5.3) as a C circuit table
+(Q-S5-6): `tally4`, `tally3`, `theta`, `settle`, `credit`, `withdraw` and
+`amd`, each with a static PBS count. `langc fhe N` prints the table. The
+client module `build/tfhe-client.wasm` encrypts a ballot under the public
+key (Q-S5-4, Q-S5-8) and casts it to the Q-S5-1 keys (Q-S5-9). The gate
+runs the equation (1.1) differential on the full encrypted chain at N 7
+(Q-S5-3, Q-S5-10): the cast is 113 PBS, and the 7 circuits are 1503 Wasm
+PBS. One Wasm PBS takes 74.5 ms (arm64), and the budget is 138 ms (O4).
+
+S6a adds the key shares, the squash set and the threshold decryption.
+`src/front/tshare.c` (U1) shares a key over the 192-bit prime field
+p = c x 2^13 + 1 (Q-S6-2, Q-S6-8) with n 5 and t 2 (Q-S6-9). The share
+vector of each party has a SHA-512 commitment (Q-S6-4).
+`src/front/squash.c` (U2) has the squash set to 2^128 (Q-S6-1) and the
+squash PBS (Q-S6-12). `src/front/tdec.c` (U3) gives the threshold
+decryption of a squash LWE. Each party in the set deals the shares of a
+flood noise in [-2^106, 2^106), and the combine checks that the partials
+are on one polynomial of degree t (Q-C7, Q-S6-14, Q-S6-15). The tests use
+C test keys from a test dealer. The epoch keys at enact are planned: S6b
+(`docs/PLAN.md` section 9).
+
 ## When to reach for charter-lang
 
 | Task | charter-lang? |
@@ -86,7 +114,9 @@ Appendix E.1 signature.
 | state an escrow with deposit, settle by vote, withdraw and amend, and check its laws | yes (S2b to S2d) |
 | run the clear meaning of a transcript in Wasm | yes (S3) |
 | hash a value, make a Merkle root or a hash chain step, and verify a FROST signature, in `langc eval` and in Wasm | yes (S4) |
-| tally encrypted ballots and update encrypted credits under threshold TFHE | yes, PLANNED (S5, S6) |
+| tally encrypted ballots and update encrypted credits under TFHE, in C and in Wasm | yes (S5) |
+| decrypt with a threshold of members | yes (S6a) |
+| make the epoch keys at enact | yes, PLANNED (S6b) |
 | prove membership and ballot well-formedness in a circuit | yes, PLANNED (S7) |
 | verify a transcript as a member node or as a public verifier | yes, PLANNED (S8) |
 | an on-chain escrow on EVM | no: use escrow-lang |
@@ -107,6 +137,11 @@ Appendix E.1 signature.
 
 `make check` builds `build/langc` with tcc and runs the gate. The gate
 needs node, wasm-validate, wasm-objdump and wasm-interp.
+`make check-clang` compiles the same sources with clang and the repo
+flags. `make check-squash` builds `build/squashtool` with `cc -O2` and
+runs the full squash PBS rows and the tdec squash rows. It makes one
+squash BSK (812 MB) and takes about 104 s on a quiet machine. It is not
+part of `make check` (Q-S6-13).
 
 ## License
 

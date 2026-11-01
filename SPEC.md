@@ -317,8 +317,11 @@ back end, thus `build/langc` writes each byte. The gate runs `wasm-validate`
 on each module and a differential against `langc eval` (`test/gate.sh`).
 At S2d the module comes from the kit IR, with the ops ADD, SUB, MUL, EQ,
 LE, ADD_CARRY, MUL_CARRY and OR. S3 adds the stream entries for the clear meaning
-of the domain, with the client and node entry points. The FHE circuit IR
-(S5) and the ZK circuit IR (S7) are planned (`docs/PLAN.md` 5.2 and 5.3).
+of the domain, with the client and node entry points. S5 adds the
+FHE circuit IR (`docs/PLAN.md` 5.3) as a C circuit table
+(`src/front/fhe.c`, `langc fhe N`) and the Wasm TFHE kernels. The
+threshold decryption (S6a, `src/front/tdec.c`) is built. The ZK circuit
+IR (S7, `docs/PLAN.md` 5.2) is planned.
 
 An instance is a top-level definition whose type is a data type (F14).
 
@@ -398,7 +401,7 @@ and the compiler needs no separate axiom report.
 ## 9. Open items
 
 The open items are in `docs/PLAN.md` section 10 (O-off-1 to O-off-8 and
-O1 to O9). The Q items and their rulings are in `docs/PLAN.md` section 11.
+O1 to O10). The Q items and their rulings are in `docs/PLAN.md` section 11.
 
 ## 10. Milestones
 
