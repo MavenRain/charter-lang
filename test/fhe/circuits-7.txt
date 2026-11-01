@@ -1,0 +1,92 @@
+circuit tally4 (block x0_0, block x0_1, block x0_2, block x0_3, block x1_0, block x1_1, block x1_2, block x1_3, block x2_0, block x2_1, block x2_2, block x2_3, block x3_0, block x3_1, block x3_2, block x3_3, block x4_0, block x4_1, block x4_2, block x4_3, block x5_0, block x5_1, block x5_2, block x5_3, block x6_0, block x6_1, block x6_2, block x6_3) -> (radix, radix, radix, radix), 504 PBS
+  r0 := rmul(x0_0, 1)
+  r1 := rmul(x1_0, 1)
+  r2 := rmul(x2_0, 1)
+  r3 := rmul(x3_0, 1)
+  r4 := rmul(x4_0, 1)
+  r5 := rmul(x5_0, 1)
+  r6 := rmul(x6_0, 1)
+  r7 := rsum(r0 .. r6)               126
+  r0 := rmul(x0_1, 1)
+  r1 := rmul(x1_1, 1)
+  r2 := rmul(x2_1, 1)
+  r3 := rmul(x3_1, 1)
+  r4 := rmul(x4_1, 1)
+  r5 := rmul(x5_1, 1)
+  r6 := rmul(x6_1, 1)
+  r8 := rsum(r0 .. r6)               126
+  r0 := rmul(x0_2, 1)
+  r1 := rmul(x1_2, 1)
+  r2 := rmul(x2_2, 1)
+  r3 := rmul(x3_2, 1)
+  r4 := rmul(x4_2, 1)
+  r5 := rmul(x5_2, 1)
+  r6 := rmul(x6_2, 1)
+  r9 := rsum(r0 .. r6)               126
+  r0 := rmul(x0_3, 1)
+  r1 := rmul(x1_3, 1)
+  r2 := rmul(x2_3, 1)
+  r3 := rmul(x3_3, 1)
+  r4 := rmul(x4_3, 1)
+  r5 := rmul(x5_3, 1)
+  r6 := rmul(x6_3, 1)
+  r10 := rsum(r0 .. r6)              126
+  return r7, r8, r9, r10
+circuit tally3 (block x0_0, block x0_1, block x0_2, block x1_0, block x1_1, block x1_2, block x2_0, block x2_1, block x2_2, block x3_0, block x3_1, block x3_2, block x4_0, block x4_1, block x4_2, block x5_0, block x5_1, block x5_2, block x6_0, block x6_1, block x6_2) -> (radix, radix, radix), 378 PBS
+  r0 := rmul(x0_0, 1)
+  r1 := rmul(x1_0, 1)
+  r2 := rmul(x2_0, 1)
+  r3 := rmul(x3_0, 1)
+  r4 := rmul(x4_0, 1)
+  r5 := rmul(x5_0, 1)
+  r6 := rmul(x6_0, 1)
+  r7 := rsum(r0 .. r6)               126
+  r0 := rmul(x0_1, 1)
+  r1 := rmul(x1_1, 1)
+  r2 := rmul(x2_1, 1)
+  r3 := rmul(x3_1, 1)
+  r4 := rmul(x4_1, 1)
+  r5 := rmul(x5_1, 1)
+  r6 := rmul(x6_1, 1)
+  r8 := rsum(r0 .. r6)               126
+  r0 := rmul(x0_2, 1)
+  r1 := rmul(x1_2, 1)
+  r2 := rmul(x2_2, 1)
+  r3 := rmul(x3_2, 1)
+  r4 := rmul(x4_2, 1)
+  r5 := rmul(x5_2, 1)
+  r6 := rmul(x6_2, 1)
+  r9 := rsum(r0 .. r6)               126
+  return r7, r8, r9
+circuit theta (radix cRel, radix cRef; clear t) -> block, 127 PBS
+  r0 := trivial t
+  b0 := rle(r0, cRel)                63
+  b1 := rle(r0, cRef)                63
+  b2 := pair(b0, b1)
+  b3 := lut(b2, THETA)               1
+  return b3
+circuit settle (block d) -> (block, block, block), 2 PBS
+  b0 := lut(d, ISREL)                1
+  b1 := lut(d, ISREF)                1
+  b2 := badd(b0, b1)
+  return b0, b1, b2
+circuit credit (radix q, radix p, block r, block rf; clear amount) -> (radix, radix), 126 PBS
+  r0 := rmul(r, amount)
+  r1 := radd(q, r0)                  63
+  r2 := rmul(rf, amount)
+  r3 := radd(p, r2)                  63
+  return r1, r3
+circuit withdraw (radix a; clear amount) -> (block, radix), 126 PBS
+  r0 := trivial amount
+  b0 := rle(r0, a)                   63
+  r1 := rmul(b0, 2^64 - amount)
+  r2 := radd(a, r1)                  63
+  return b0, r2
+circuit amd (radix cAdopt, radix cReject; clear tA, clear slack) -> block, 127 PBS
+  r0 := trivial tA
+  b0 := rle(r0, cAdopt)              63
+  r1 := trivial slack
+  b1 := rle(cReject, r1)             63
+  b2 := pair(b0, b1)
+  b3 := lut(b2, AMD)                 1
+  return b3

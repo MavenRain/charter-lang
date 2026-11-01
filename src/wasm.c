@@ -27,8 +27,10 @@
 #include <string.h>
 
 #include "front/ed25519.h"
+#include "front/fhe.h"
 #include "front/poseidon2.h"
 #include "front/sha512.h"
+#include "front/tfhe.h"
 #include "target.h"
 #include "wasm_kernel.h"
 
@@ -95,7 +97,38 @@ enum {
   SECTION_MEMORY = 5,
   SECTION_GLOBAL = 6,
   SECTION_EXPORT = 7,
-  SECTION_CODE = 10
+  SECTION_CODE = 10,
+  SECTION_DATA = 11
+};
+
+/* The f64 and i32 ops of the TFHE kernels (S5 U2a). */
+enum {
+  OP_F64_LOAD = 0x2B,
+  OP_F64_STORE = 0x39,
+  OP_F64_CONST = 0x44,
+  OP_I32_LT_U = 0x49,
+  OP_I32_GE_U = 0x4F,
+  OP_F64_LT = 0x63,
+  OP_F64_GE = 0x66,
+  OP_I32_ADD = 0x6A,
+  OP_I32_SUB = 0x6B,
+  OP_I32_MUL = 0x6C,
+  OP_I32_REM_U = 0x70,
+  OP_I32_OR = 0x72,
+  OP_I32_EQZ = 0x45,
+  OP_I32_AND = 0x71,
+  OP_I32_SHL = 0x74,
+  OP_I32_SHR_U = 0x76,
+  OP_I64_DIV_S = 0x7F,
+  OP_F64_NEG = 0x9A,
+  OP_F64_FLOOR = 0x9C,
+  OP_F64_NEAREST = 0x9E,
+  OP_F64_ADD = 0xA0,
+  OP_F64_SUB = 0xA1,
+  OP_F64_MUL = 0xA2,
+  OP_I64_TRUNC_F64_S = 0xB0,
+  OP_F64_CONVERT_I64_S = 0xB9,
+  TYPE_F64 = 0x7C
 };
 
 /* A byte sink. With out == NULL it only counts. */
@@ -1602,13 +1635,19 @@ static int part_test_ed25519(Sink *s, const void *arg) {
   return ok && op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
 }
 
-static int func_type(Sink *s, unsigned params, unsigned results) {
+/* A function type: PARAMS parameters of the value type TYPE, RESULTS i64
+   results. */
+static int typed_func(Sink *s, unsigned params, unsigned type, unsigned results) {
   unsigned k;
   int ok = put_byte(s, TYPE_FUNC) && put_uleb(s, params);
-  for (k = 0; k < params && ok; k++) ok = put_byte(s, TYPE_I64);
+  for (k = 0; k < params && ok; k++) ok = put_byte(s, type);
   ok = ok && put_uleb(s, results);
   for (k = 0; k < results && ok; k++) ok = put_byte(s, TYPE_I64);
   return ok;
+}
+
+static int func_type(Sink *s, unsigned params, unsigned results) {
+  return typed_func(s, params, TYPE_I64, results);
 }
 
 /* The kernel test module: functions 0 .. 4 are the kernel up to hash (K =
@@ -1706,6 +1745,1323 @@ int wasm_write_kernel_test(FILE *out, FILE *err) {
        section(&s, SECTION_MEMORY, part_memory, NULL) && section(&s, SECTION_EXPORT, part_kernel_test_exports, NULL) &&
        section(&s, SECTION_CODE, part_kernel_test_code, NULL);
   if (!ok && ferror(out)) fputs("langc: IO: -: cannot write the wasm kernel module\n", err);
+  return ok;
+}
+
+/* The TFHE kernel test module (S5 U2a): the FFT kernels of
+   src/front/tfhe.c with one Wasm op for each C op, in the C order, so that
+   C and Wasm give the same bits (Wasm has no fused multiply-add, TinyCC does
+   not contract). The twiddle tables of tfhe_fft_init are the data section:
+   Wasm does not compute cos or sin. Memory: bytes 0 .. 4 MiB are the stream
+   input and the output block; the tables are at TFHE_BASE in the TfheFft
+   order, then the scratch of polymul. */
+enum {
+  TFHE_HALF = 8 * TFHE_FFT_M, /* the im half of a TfheFourier, the high half of a polynomial */
+  TFHE_BASE = 0x400000,
+  TFHE_TW_RE = TFHE_BASE,
+  TFHE_TW_IM = TFHE_BASE + TFHE_HALF,
+  TFHE_RT_RE = TFHE_BASE + 2 * TFHE_HALF,
+  TFHE_RT_IM = TFHE_RT_RE + TFHE_HALF / 2,
+  TFHE_FA = TFHE_BASE + 0x8000,
+  TFHE_FB = TFHE_BASE + 0xC000,
+  TFHE_ACC_F = TFHE_BASE + 0x10000,
+  /* S5 U2b: the PBS scratch after ACC_F, then the keys that the host sets
+     (run-wasm.mjs `--load`): the KSK words at WASM_TFHE_KSK (8 MiB), the bits of the BSK
+     Fourier doubles after them. S5 U4b: the module minimum TFHE_PAGES
+     covers the keys and the circuit registers after them. */
+  TFHE_SMALL = TFHE_BASE + 0x14000,
+  TFHE_SWITCHED = TFHE_BASE + 0x16000,
+  TFHE_ACC = TFHE_BASE + 0x18000,
+  TFHE_DIFF = TFHE_BASE + 0x20000,
+  TFHE_DIGITS = TFHE_BASE + 0x28000,
+  /* S5 U3b: the 5 LUTs of tfhe_radix_luts (the data section), then the
+     radix scratch blocks. */
+  TFHE_RLUT = TFHE_BASE + 0x30000,
+  TFHE_RCARRY = TFHE_BASE + 0x48000,
+  TFHE_RIN = TFHE_BASE + 0x50000,
+  TFHE_RCMP = TFHE_BASE + 0x58000,
+  TFHE_RACC = TFHE_BASE + 0x60000,
+  /* S5 U4b: the 4 LUTs of fhe_luts, then the trivial block of 1 (the data
+     section sets its body word). */
+  TFHE_FLUT = TFHE_BASE + 0x68000,
+  TFHE_FONE = TFHE_BASE + 0x78000,
+  TFHE_BLOCK_BYTES = 8 * TFHE_BLOCK_WORDS,
+  TFHE_RADIX_BYTES = TFHE_RADIX_BLOCKS * TFHE_BLOCK_BYTES,
+  TFHE_RADIX_WORDS = TFHE_RADIX_BLOCKS * TFHE_BLOCK_WORDS,
+  TFHE_KSK = WASM_TFHE_KSK,
+  TFHE_KSK_ROW = 8 * (TFHE_LWE_N + 1),
+  TFHE_BSK = TFHE_KSK + 8 * TFHE_KSK_WORDS,
+  TFHE_KEY_END = TFHE_BSK + 8 * TFHE_BSK_FOURIER_DOUBLES,
+  /* S5 U4b: the circuit registers after the keys (the host grows the memory
+     only to the end of a key file). */
+  TFHE_FRADIX = TFHE_KEY_END,
+  TFHE_FBLOCK = TFHE_FRADIX + FHE_RADIX_REGS * TFHE_RADIX_BYTES,
+  TFHE_FHE_END = TFHE_FBLOCK + FHE_BLOCK_REGS * TFHE_BLOCK_BYTES,
+  TFHE_PAGES = (TFHE_FHE_END + 0xFFFF) / 0x10000 /* the module minimum covers TFHE_BASE .. TFHE_FHE_END */
+};
+
+/* The functions: the kernels, then the entries (contiguous at the end:
+   the export loop goes over them). */
+enum {
+  TFHE_DIF,
+  TFHE_DIT_INVERSE,
+  TFHE_FORWARD,
+  TFHE_MUL_ADD,
+  TFHE_BACKWARD_ADD,
+  TFHE_FROM_DOUBLE,
+  TFHE_ZERO,
+  TFHE_DECOMPOSE,
+  TFHE_MONOMIAL,
+  TFHE_SAMPLE_EXTRACT,
+  TFHE_KEYSWITCH,
+  TFHE_MODULUS_SWITCH,
+  TFHE_CMUX,
+  TFHE_BLIND_ROTATE,
+  TFHE_PBS,
+  TFHE_BLOCK_ADD,
+  TFHE_RADIX_ACC,
+  TFHE_BLOCK_SCALE,
+  TFHE_BLOCK_PAIR,
+  TFHE_PROPAGATE,
+  TFHE_RADIX_ADD,
+  TFHE_RADIX_SCALAR_MUL,
+  TFHE_RADIX_LE,
+  TFHE_RADIX_SUM,
+  TFHE_ENTRY_FFT,
+  TFHE_ENTRY_IFFT,
+  TFHE_ENTRY_POLYMUL,
+  TFHE_ENTRY_KS,
+  TFHE_ENTRY_MS,
+  TFHE_ENTRY_SE,
+  TFHE_ENTRY_BR,
+  TFHE_ENTRY_PBS,
+  TFHE_ENTRY_RADD,
+  TFHE_ENTRY_RMUL,
+  TFHE_ENTRY_RLE,
+  TFHE_ENTRY_RSUM4,
+  TFHE_ENTRY_RSUM5,
+  TFHE_ENTRY_TALLY4,
+  TFHE_ENTRY_TALLY3,
+  TFHE_ENTRY_THETA,
+  TFHE_ENTRY_SETTLE,
+  TFHE_ENTRY_CREDIT,
+  TFHE_ENTRY_WITHDRAW,
+  TFHE_ENTRY_AMD,
+  TFHE_ENTRY_EXPAND,
+  TFHE_FUNCS,
+  TFHE_ENTRIES = TFHE_FUNCS - TFHE_ENTRY_FFT
+};
+
+/* A memory op at the byte offset OFFSET (align 3). */
+static int mem_at(Sink *s, unsigned op, uint32_t offset) {
+  return put_byte(s, op) && put_uleb(s, ALIGN_WORD) && put_uleb(s, offset);
+}
+
+/* Writes the N doubles of V, each low byte first. */
+static int put_doubles(Sink *s, const double *v, size_t n) {
+  uint64_t bits;
+  size_t i;
+  unsigned k;
+  int ok = 1;
+  for (i = 0; i < n && ok; i++) {
+    memcpy(&bits, &v[i], sizeof bits);
+    for (k = 0; k < 8 && ok; k++) ok = put_byte(s, (unsigned)(bits >> (8u * k)) & 0xFFu);
+  }
+  return ok;
+}
+
+static int f64_const(Sink *s, double v) {
+  return put_byte(s, OP_F64_CONST) && put_doubles(s, &v, 1);
+}
+
+/* The local groups: N32 i32 locals, then N locals of TYPE; an empty group
+   is not written. */
+static int typed_locals(Sink *s, unsigned n32, unsigned n, unsigned type) {
+  return put_uleb(s, (uint64_t)(n32 > 0) + (n > 0)) && (n32 == 0 || (put_uleb(s, n32) && put_byte(s, TYPE_I32))) &&
+         (n == 0 || (put_uleb(s, n) && put_byte(s, type)));
+}
+
+/* N32 i32 locals, then NF f64 locals. */
+static int tfhe_locals(Sink *s, unsigned n32, unsigned nf) {
+  return typed_locals(s, n32, nf, TYPE_F64);
+}
+
+/* Pushes local A + local B (i32). */
+static int add_locals(Sink *s, uint32_t a, uint32_t b) {
+  return op2(s, OP_LOCAL_GET, a) && op2(s, OP_LOCAL_GET, b) && put_byte(s, OP_I32_ADD);
+}
+
+/* Pushes the f64 at local BASE + local INDEX + OFFSET. */
+static int f64_at(Sink *s, uint32_t base, uint32_t index, uint32_t offset) {
+  return add_locals(s, base, index) && mem_at(s, OP_F64_LOAD, offset);
+}
+
+/* Pushes the f64 at the address in local A. */
+static int f64_get(Sink *s, uint32_t a) {
+  return op2(s, OP_LOCAL_GET, a) && mem_at(s, OP_F64_LOAD, 0);
+}
+
+/* The f64 at the address in local DST := the f64 at local A OP the f64 at
+   local B. */
+static int f64_into(Sink *s, uint32_t dst, uint32_t a, uint32_t b, unsigned op) {
+  return op2(s, OP_LOCAL_GET, dst) && f64_get(s, a) && f64_get(s, b) && put_byte(s, op) && mem_at(s, OP_F64_STORE, 0);
+}
+
+/* The f64 at the address in local DST := the f64 at local A OP local V. */
+static int f64_with(Sink *s, uint32_t dst, uint32_t a, uint32_t v, unsigned op) {
+  return op2(s, OP_LOCAL_GET, dst) && f64_get(s, a) && op2(s, OP_LOCAL_GET, v) && put_byte(s, op) &&
+         mem_at(s, OP_F64_STORE, 0);
+}
+
+/* Pushes local A * local B OP local C * local D (f64). */
+static int f64_cross(Sink *s, uint32_t a, uint32_t b, uint32_t c, uint32_t d, unsigned op) {
+  return op2(s, OP_LOCAL_GET, a) && op2(s, OP_LOCAL_GET, b) && put_byte(s, OP_F64_MUL) && op2(s, OP_LOCAL_GET, c) &&
+         op2(s, OP_LOCAL_GET, d) && put_byte(s, OP_F64_MUL) && put_byte(s, op);
+}
+
+/* Pushes the f64 at local A * local W OP the f64 at local B * local V. */
+static int f64_mem_cross(Sink *s, uint32_t a, uint32_t w, uint32_t b, uint32_t v, unsigned op) {
+  return f64_get(s, a) && op2(s, OP_LOCAL_GET, w) && put_byte(s, OP_F64_MUL) && f64_get(s, b) &&
+         op2(s, OP_LOCAL_GET, v) && put_byte(s, OP_F64_MUL) && put_byte(s, op);
+}
+
+/* Pushes local X * T[j] OP local Y * U[j]: T and U are the tables at TA and
+   UA, local J is the byte offset of j. */
+static int twist_cross(Sink *s, uint32_t j, uint32_t x, uint32_t ta, uint32_t y, uint32_t ua, unsigned op) {
+  return op2(s, OP_LOCAL_GET, x) && op2(s, OP_LOCAL_GET, j) && mem_at(s, OP_F64_LOAD, ta) && put_byte(s, OP_F64_MUL) &&
+         op2(s, OP_LOCAL_GET, y) && op2(s, OP_LOCAL_GET, j) && mem_at(s, OP_F64_LOAD, ua) && put_byte(s, OP_F64_MUL) &&
+         put_byte(s, op);
+}
+
+/* Pushes local V when LOCAL is set, else the i32 constant V. */
+static int i32_operand(Sink *s, int local, uint32_t v) {
+  return local ? op2(s, OP_LOCAL_GET, v) : i32_const(s, v);
+}
+
+static int loop_head(Sink *s) {
+  return put_byte(s, OP_LOOP) && put_byte(s, TYPE_EMPTY);
+}
+
+/* The tail of a do-while loop on local I: I := I + STEP; repeat while I <
+   LIMIT (unsigned). An operand is a local when its flag is set, else a
+   constant. */
+static int loop_tail(Sink *s, uint32_t i, int step_local, uint32_t step, int limit_local, uint32_t limit) {
+  return op2(s, OP_LOCAL_GET, i) && i32_operand(s, step_local, step) && put_byte(s, OP_I32_ADD) &&
+         op2(s, OP_LOCAL_TEE, i) && i32_operand(s, limit_local, limit) && put_byte(s, OP_I32_LT_U) &&
+         op2(s, OP_BR_IF, 0) && put_byte(s, OP_END);
+}
+
+/* The locals of fft_dif and fft_dit_inverse after re (0) and im (1): the
+   i32 loop counters and the byte addresses ra, rb, ia, ib of re[a], re[b],
+   im[a], im[b], the byte offset tw of the root; the f64 root (wr, wi) and
+   x, y (dr, di in fft_dif; vr, vi in fft_dit_inverse). */
+enum {
+  FFT_LEN = 2,
+  FFT_HALF,
+  FFT_STEP,
+  FFT_START,
+  FFT_J,
+  FFT_RA,
+  FFT_RB,
+  FFT_IA,
+  FFT_IB,
+  FFT_TW,
+  FFT_WR,
+  FFT_WI,
+  FFT_X,
+  FFT_Y
+};
+
+/* a := start + j, b := a + half: ra, rb := re + 8a, re + 8b; ia, ib the
+   same in im; tw := 8 j step; wr, wi := the root at tw (wi negated when
+   INVERSE). */
+static int fft_index(Sink *s, int inverse) {
+  uint32_t k;
+  int ok = 1;
+  for (k = 0; k < 2 && ok; k++)
+    ok = op2(s, OP_LOCAL_GET, k) && add_locals(s, FFT_START, FFT_J) && i32_const(s, 3) && put_byte(s, OP_I32_SHL) &&
+         put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_TEE, FFT_RA + 2u * k) && op2(s, OP_LOCAL_GET, FFT_HALF) &&
+         i32_const(s, 3) && put_byte(s, OP_I32_SHL) && put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_SET, FFT_RB + 2u * k);
+  return ok && op2(s, OP_LOCAL_GET, FFT_J) && op2(s, OP_LOCAL_GET, FFT_STEP) && put_byte(s, OP_I32_MUL) &&
+         i32_const(s, 3) && put_byte(s, OP_I32_SHL) && op2(s, OP_LOCAL_TEE, FFT_TW) &&
+         mem_at(s, OP_F64_LOAD, TFHE_RT_RE) && op2(s, OP_LOCAL_SET, FFT_WR) && op2(s, OP_LOCAL_GET, FFT_TW) &&
+         mem_at(s, OP_F64_LOAD, TFHE_RT_IM) && (!inverse || put_byte(s, OP_F64_NEG)) && op2(s, OP_LOCAL_SET, FFT_WI);
+}
+
+/* The fft_dif butterfly: dr, di := re[a] - re[b], im[a] - im[b]; re[a] +=
+   re[b]; im[a] += im[b]; re[b] := dr wr - di wi; im[b] := dr wi + di wr. */
+static int dif_body(Sink *s, const void *arg) {
+  (void)arg;
+  return f64_get(s, FFT_RA) && f64_get(s, FFT_RB) && put_byte(s, OP_F64_SUB) && op2(s, OP_LOCAL_SET, FFT_X) &&
+         f64_get(s, FFT_IA) && f64_get(s, FFT_IB) && put_byte(s, OP_F64_SUB) && op2(s, OP_LOCAL_SET, FFT_Y) &&
+         f64_into(s, FFT_RA, FFT_RA, FFT_RB, OP_F64_ADD) && f64_into(s, FFT_IA, FFT_IA, FFT_IB, OP_F64_ADD) &&
+         op2(s, OP_LOCAL_GET, FFT_RB) && f64_cross(s, FFT_X, FFT_WR, FFT_Y, FFT_WI, OP_F64_SUB) &&
+         mem_at(s, OP_F64_STORE, 0) && op2(s, OP_LOCAL_GET, FFT_IB) &&
+         f64_cross(s, FFT_X, FFT_WI, FFT_Y, FFT_WR, OP_F64_ADD) && mem_at(s, OP_F64_STORE, 0);
+}
+
+/* The fft_dit_inverse butterfly: vr, vi := re[b] wr - im[b] wi, re[b] wi +
+   im[b] wr; re[b] := re[a] - vr; im[b] := im[a] - vi; re[a] += vr; im[a] +=
+   vi. */
+static int dit_body(Sink *s, const void *arg) {
+  (void)arg;
+  return f64_mem_cross(s, FFT_RB, FFT_WR, FFT_IB, FFT_WI, OP_F64_SUB) && op2(s, OP_LOCAL_SET, FFT_X) &&
+         f64_mem_cross(s, FFT_RB, FFT_WI, FFT_IB, FFT_WR, OP_F64_ADD) && op2(s, OP_LOCAL_SET, FFT_Y) &&
+         f64_with(s, FFT_RB, FFT_RA, FFT_X, OP_F64_SUB) && f64_with(s, FFT_IB, FFT_IA, FFT_Y, OP_F64_SUB) &&
+         f64_with(s, FFT_RA, FFT_RA, FFT_X, OP_F64_ADD) && f64_with(s, FFT_IA, FFT_IA, FFT_Y, OP_F64_ADD);
+}
+
+/* The loops of fft_dif (len from M down to 2, step from 1 up) and of
+   fft_dit_inverse (INVERSE: len from 2 up to M, step from M / 2 down); for
+   start from 0 by len below M, for j from 0 below half: BODY. Every count is
+   at least 1, so each loop is a do-while. */
+static int fft_loops(Sink *s, int inverse, Part body) {
+  int ok = tfhe_locals(s, FFT_WR - FFT_LEN, FFT_Y + 1u - FFT_WR) && i32_const(s, inverse ? 2u : TFHE_FFT_M) &&
+           op2(s, OP_LOCAL_SET, FFT_LEN) && i32_const(s, inverse ? TFHE_FFT_M / 2u : 1u) &&
+           op2(s, OP_LOCAL_SET, FFT_STEP) && loop_head(s) && op2(s, OP_LOCAL_GET, FFT_LEN) && i32_const(s, 1) &&
+           put_byte(s, OP_I32_SHR_U) && op2(s, OP_LOCAL_SET, FFT_HALF) && i32_const(s, 0) &&
+           op2(s, OP_LOCAL_SET, FFT_START) && loop_head(s) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, FFT_J) &&
+           loop_head(s) && fft_index(s, inverse) && body(s, NULL) && loop_tail(s, FFT_J, 0, 1, 1, FFT_HALF) &&
+           loop_tail(s, FFT_START, 1, FFT_LEN, 0, TFHE_FFT_M) && op2(s, OP_LOCAL_GET, FFT_STEP) && i32_const(s, 1) &&
+           put_byte(s, inverse ? OP_I32_SHR_U : OP_I32_SHL) && op2(s, OP_LOCAL_SET, FFT_STEP) &&
+           op2(s, OP_LOCAL_GET, FFT_LEN) && i32_const(s, 1) && put_byte(s, inverse ? OP_I32_SHL : OP_I32_SHR_U) &&
+           op2(s, OP_LOCAL_TEE, FFT_LEN);
+  return ok &&
+         (inverse ? i32_const(s, 2u * TFHE_FFT_M) && put_byte(s, OP_I32_LT_U)
+                  : i32_const(s, 2) && put_byte(s, OP_I32_GE_U)) &&
+         op2(s, OP_BR_IF, 0) && put_byte(s, OP_END) && put_byte(s, OP_END);
+}
+
+static int part_tfhe_dif(Sink *s, const void *arg) {
+  (void)arg;
+  return fft_loops(s, 0, dif_body);
+}
+
+static int part_tfhe_dit_inverse(Sink *s, const void *arg) {
+  (void)arg;
+  return fft_loops(s, 1, dit_body);
+}
+
+/* fft_forward (out, poly): for each j, with x, y the signed words j and j +
+   M of poly: out.re[j] := x tw_re - y tw_im; out.im[j] := x tw_im + y
+   tw_re; then fft_dif (out, out + 8M). */
+enum { FWD_OUT, FWD_POLY, FWD_J, FWD_X, FWD_Y };
+
+static int part_tfhe_forward(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 2) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, FWD_J) && loop_head(s) &&
+         add_locals(s, FWD_POLY, FWD_J) && mem_at(s, OP_I64_LOAD, 0) && put_byte(s, OP_F64_CONVERT_I64_S) &&
+         op2(s, OP_LOCAL_SET, FWD_X) && add_locals(s, FWD_POLY, FWD_J) && mem_at(s, OP_I64_LOAD, TFHE_HALF) &&
+         put_byte(s, OP_F64_CONVERT_I64_S) && op2(s, OP_LOCAL_SET, FWD_Y) && add_locals(s, FWD_OUT, FWD_J) &&
+         twist_cross(s, FWD_J, FWD_X, TFHE_TW_RE, FWD_Y, TFHE_TW_IM, OP_F64_SUB) && mem_at(s, OP_F64_STORE, 0) &&
+         add_locals(s, FWD_OUT, FWD_J) && twist_cross(s, FWD_J, FWD_X, TFHE_TW_IM, FWD_Y, TFHE_TW_RE, OP_F64_ADD) &&
+         mem_at(s, OP_F64_STORE, TFHE_HALF) && loop_tail(s, FWD_J, 0, 8, 0, TFHE_HALF) &&
+         op2(s, OP_LOCAL_GET, FWD_OUT) && op2(s, OP_LOCAL_GET, FWD_OUT) && i32_const(s, TFHE_HALF) &&
+         put_byte(s, OP_I32_ADD) && op2(s, OP_CALL, TFHE_DIF) && put_byte(s, OP_END);
+}
+
+/* fourier_mul_add (acc, a, b_re, b_im): acc.re[j] += a.re b_re - a.im b_im;
+   acc.im[j] += a.re b_im + a.im b_re. */
+enum { MA_ACC, MA_A, MA_BRE, MA_BIM, MA_J };
+
+static int part_tfhe_mul_add(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 0) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, MA_J) && loop_head(s) &&
+         add_locals(s, MA_ACC, MA_J) && f64_at(s, MA_ACC, MA_J, 0) && f64_at(s, MA_A, MA_J, 0) &&
+         f64_at(s, MA_BRE, MA_J, 0) && put_byte(s, OP_F64_MUL) && f64_at(s, MA_A, MA_J, TFHE_HALF) &&
+         f64_at(s, MA_BIM, MA_J, 0) && put_byte(s, OP_F64_MUL) && put_byte(s, OP_F64_SUB) && put_byte(s, OP_F64_ADD) &&
+         mem_at(s, OP_F64_STORE, 0) && add_locals(s, MA_ACC, MA_J) && f64_at(s, MA_ACC, MA_J, TFHE_HALF) &&
+         f64_at(s, MA_A, MA_J, 0) && f64_at(s, MA_BIM, MA_J, 0) && put_byte(s, OP_F64_MUL) &&
+         f64_at(s, MA_A, MA_J, TFHE_HALF) && f64_at(s, MA_BRE, MA_J, 0) && put_byte(s, OP_F64_MUL) &&
+         put_byte(s, OP_F64_ADD) && put_byte(s, OP_F64_ADD) && mem_at(s, OP_F64_STORE, TFHE_HALF) &&
+         loop_tail(s, MA_J, 0, 8, 0, TFHE_HALF) && put_byte(s, OP_END);
+}
+
+/* fft_backward_add (poly, in): fft_dit_inverse (in, in + 8M); for each j,
+   xr, xi := in.re[j] scale, in.im[j] scale (scale = 1 / M, exact); poly[j]
+   += torus_from_double (xr tw_re + xi tw_im); poly[j + M] +=
+   torus_from_double (xi tw_re - xr tw_im). */
+enum { BWD_POLY, BWD_IN, BWD_J, BWD_XR, BWD_XI };
+
+static int part_tfhe_backward_add(Sink *s, const void *arg) {
+  const double scale = 1.0 / (double)TFHE_FFT_M;
+  (void)arg;
+  return tfhe_locals(s, 1, 2) && op2(s, OP_LOCAL_GET, BWD_IN) && op2(s, OP_LOCAL_GET, BWD_IN) &&
+         i32_const(s, TFHE_HALF) && put_byte(s, OP_I32_ADD) && op2(s, OP_CALL, TFHE_DIT_INVERSE) &&
+         i32_const(s, 0) && op2(s, OP_LOCAL_SET, BWD_J) && loop_head(s) && f64_at(s, BWD_IN, BWD_J, 0) &&
+         f64_const(s, scale) && put_byte(s, OP_F64_MUL) && op2(s, OP_LOCAL_SET, BWD_XR) &&
+         f64_at(s, BWD_IN, BWD_J, TFHE_HALF) && f64_const(s, scale) && put_byte(s, OP_F64_MUL) &&
+         op2(s, OP_LOCAL_SET, BWD_XI) && add_locals(s, BWD_POLY, BWD_J) && add_locals(s, BWD_POLY, BWD_J) &&
+         mem_at(s, OP_I64_LOAD, 0) && twist_cross(s, BWD_J, BWD_XR, TFHE_TW_RE, BWD_XI, TFHE_TW_IM, OP_F64_ADD) &&
+         op2(s, OP_CALL, TFHE_FROM_DOUBLE) && put_byte(s, OP_I64_ADD) && mem_at(s, OP_I64_STORE, 0) &&
+         add_locals(s, BWD_POLY, BWD_J) && add_locals(s, BWD_POLY, BWD_J) && mem_at(s, OP_I64_LOAD, TFHE_HALF) &&
+         twist_cross(s, BWD_J, BWD_XI, TFHE_TW_RE, BWD_XR, TFHE_TW_IM, OP_F64_SUB) &&
+         op2(s, OP_CALL, TFHE_FROM_DOUBLE) && put_byte(s, OP_I64_ADD) && mem_at(s, OP_I64_STORE, TFHE_HALF) &&
+         loop_tail(s, BWD_J, 0, 8, 0, TFHE_HALF) && put_byte(s, OP_END);
+}
+
+/* torus_from_double (x): r := nearest (x) (ties to even); in [-2^63, 2^63)
+   it is the signed truncation; else r -= floor (r 2^-64 + 0.5) 2^64, r -=
+   2^64 when r >= 2^63, then the truncation (src/front/tfhe.c). */
+static int part_tfhe_from_double(Sink *s, const void *arg) {
+  const double p63 = 9223372036854775808.0;
+  const double p64 = 18446744073709551616.0;
+  (void)arg;
+  return tfhe_locals(s, 0, 1) && op2(s, OP_LOCAL_GET, 0) && put_byte(s, OP_F64_NEAREST) && op2(s, OP_LOCAL_TEE, 1) &&
+         f64_const(s, -p63) && put_byte(s, OP_F64_GE) && op2(s, OP_LOCAL_GET, 1) && f64_const(s, p63) &&
+         put_byte(s, OP_F64_LT) && put_byte(s, OP_I32_AND) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) &&
+         op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_I64_TRUNC_F64_S) && put_byte(s, OP_RETURN) && put_byte(s, OP_END) &&
+         op2(s, OP_LOCAL_GET, 1) && op2(s, OP_LOCAL_GET, 1) && f64_const(s, 1.0 / p64) && put_byte(s, OP_F64_MUL) &&
+         f64_const(s, 0.5) && put_byte(s, OP_F64_ADD) && put_byte(s, OP_F64_FLOOR) && f64_const(s, p64) &&
+         put_byte(s, OP_F64_MUL) && put_byte(s, OP_F64_SUB) && op2(s, OP_LOCAL_TEE, 1) && f64_const(s, p63) &&
+         put_byte(s, OP_F64_GE) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) && op2(s, OP_LOCAL_GET, 1) &&
+         f64_const(s, p64) && put_byte(s, OP_F64_SUB) && op2(s, OP_LOCAL_SET, 1) && put_byte(s, OP_END) &&
+         op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_I64_TRUNC_F64_S) && put_byte(s, OP_END);
+}
+
+/* zero (addr, words): the WORDS words from ADDR := 0 (WORDS at least 1). */
+static int part_tfhe_zero(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 0, 0) && op2(s, OP_LOCAL_GET, 0) && op2(s, OP_LOCAL_GET, 1) && i32_const(s, 3) &&
+         put_byte(s, OP_I32_SHL) && put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_SET, 1) && loop_head(s) &&
+         op2(s, OP_LOCAL_GET, 0) && i64_const(s, 0) && mem_at(s, OP_I64_STORE, 0) && loop_tail(s, 0, 0, 8, 1, 1) &&
+         put_byte(s, OP_END);
+}
+
+/* S5 U2b: the PBS kernels of src/front/tfhe.c, one Wasm op for each C op,
+   in the C order. The i64 values hold the bits of the C uint64_t and
+   int64_t values. */
+
+/* decompose (x, base_log, level, digits), all i64: as decompose in
+   src/front/tfhe.c; digit l - 1 is the word at the address DIGITS + 8 (l -
+   1). The level is at least 1 (a do-while). */
+enum { DEC_X, DEC_LOG, DEC_LEVEL, DEC_DIGITS, DEC_BASE, DEC_STATE, DEC_DIGIT, DEC_L };
+
+/* Pushes base_log level, the total of decompose (i64). */
+static int dec_total(Sink *s) {
+  return op2(s, OP_LOCAL_GET, DEC_LOG) && op2(s, OP_LOCAL_GET, DEC_LEVEL) && put_byte(s, OP_I64_MUL);
+}
+
+/* state += 1, the carry of a negative digit. */
+static int dec_carry(Sink *s) {
+  return op2(s, OP_LOCAL_GET, DEC_STATE) &&
+         i64_const(s, 1) && put_byte(s, OP_I64_ADD) && op2(s, OP_LOCAL_SET, DEC_STATE);
+}
+
+/* Pushes local L - 1 (i64). */
+static int minus_one(Sink *s, uint32_t l) {
+  return op2(s, OP_LOCAL_GET, l) && i64_const(s, 1) && put_byte(s, OP_I64_SUB);
+}
+
+static int part_tfhe_decompose(Sink *s, const void *arg) {
+  (void)arg;
+  return i64_locals(s, DEC_L + 1u - DEC_BASE) && i64_const(s, 1) && op2(s, OP_LOCAL_GET, DEC_LOG) &&
+         put_byte(s, OP_I64_SHL) && op2(s, OP_LOCAL_SET, DEC_BASE) && op2(s, OP_LOCAL_GET, DEC_X) &&
+         i64_const(s, 1) && i64_const(s, 63) && dec_total(s) && put_byte(s, OP_I64_SUB) && put_byte(s, OP_I64_SHL) &&
+         put_byte(s, OP_I64_ADD) && i64_const(s, 64) && dec_total(s) && put_byte(s, OP_I64_SUB) &&
+         put_byte(s, OP_I64_SHR_U) && op2(s, OP_LOCAL_SET, DEC_STATE) && op2(s, OP_LOCAL_GET, DEC_LEVEL) &&
+         op2(s, OP_LOCAL_SET, DEC_L) && loop_head(s) && op2(s, OP_LOCAL_GET, DEC_STATE) && minus_one(s, DEC_BASE) &&
+         put_byte(s, OP_I64_AND) && op2(s, OP_LOCAL_SET, DEC_DIGIT) && op2(s, OP_LOCAL_GET, DEC_STATE) &&
+         op2(s, OP_LOCAL_GET, DEC_LOG) && put_byte(s, OP_I64_SHR_U) && op2(s, OP_LOCAL_SET, DEC_STATE) &&
+         op2(s, OP_LOCAL_GET, DEC_DIGITS) && minus_one(s, DEC_L) && i64_const(s, 3) && put_byte(s, OP_I64_SHL) &&
+         put_byte(s, OP_I64_ADD) && put_byte(s, OP_I32_WRAP_I64) && op2(s, OP_LOCAL_GET, DEC_DIGIT) &&
+         op2(s, OP_LOCAL_GET, DEC_BASE) && i64_const(s, 1) && put_byte(s, OP_I64_SHR_U) && put_byte(s, OP_I64_GE_U) &&
+         put_byte(s, OP_IF) && put_byte(s, TYPE_I64) && op2(s, OP_LOCAL_GET, DEC_DIGIT) &&
+         op2(s, OP_LOCAL_GET, DEC_BASE) && put_byte(s, OP_I64_SUB) && dec_carry(s) && put_byte(s, OP_ELSE) &&
+         op2(s, OP_LOCAL_GET, DEC_DIGIT) && put_byte(s, OP_END) && mem_at(s, OP_I64_STORE, 0) &&
+         minus_one(s, DEC_L) && op2(s, OP_LOCAL_TEE, DEC_L) && i64_const(s, 0) && put_byte(s, OP_I64_NE) &&
+         op2(s, OP_BR_IF, 0) && put_byte(s, OP_END) && put_byte(s, OP_END);
+}
+
+/* monomial (out, in, power), i32: OUT := X^POWER IN mod X^N + 1, with
+   POWER below 2N, as poly_monomial_mul. */
+enum { MON_OUT, MON_IN, MON_POWER, MON_J, MON_K };
+
+/* Pushes local B + 8 local I (i32). */
+static int word_at(Sink *s, uint32_t b, uint32_t i) {
+  return op2(s, OP_LOCAL_GET, b) && op2(s, OP_LOCAL_GET, i) && i32_const(s, 3) && put_byte(s, OP_I32_SHL) &&
+         put_byte(s, OP_I32_ADD);
+}
+
+static int part_tfhe_monomial(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 2, 0) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, MON_J) && loop_head(s) &&
+         add_locals(s, MON_J, MON_POWER) && op2(s, OP_LOCAL_TEE, MON_K) && i32_const(s, 2u * TFHE_POLY_N) &&
+         put_byte(s, OP_I32_GE_U) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) && op2(s, OP_LOCAL_GET, MON_K) &&
+         i32_const(s, 2u * TFHE_POLY_N) && put_byte(s, OP_I32_SUB) && op2(s, OP_LOCAL_SET, MON_K) &&
+         put_byte(s, OP_END) && op2(s, OP_LOCAL_GET, MON_K) && i32_const(s, TFHE_POLY_N) &&
+         put_byte(s, OP_I32_LT_U) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) && word_at(s, MON_OUT, MON_K) &&
+         word_at(s, MON_IN, MON_J) && mem_at(s, OP_I64_LOAD, 0) && mem_at(s, OP_I64_STORE, 0) &&
+         put_byte(s, OP_ELSE) && word_at(s, MON_OUT, MON_K) && i32_const(s, 8u * TFHE_POLY_N) &&
+         put_byte(s, OP_I32_SUB) && i64_const(s, 0) && word_at(s, MON_IN, MON_J) && mem_at(s, OP_I64_LOAD, 0) &&
+         put_byte(s, OP_I64_SUB) && mem_at(s, OP_I64_STORE, 0) && put_byte(s, OP_END) &&
+         loop_tail(s, MON_J, 0, 1, 0, TFHE_POLY_N) && put_byte(s, OP_END);
+}
+
+/* sample_extract (out, acc), i32: the LWE of the constant coefficient of
+   the GLWE ACC (mask, then body), as tfhe_sample_extract. */
+enum { SE_OUT, SE_ACC, SE_J };
+
+/* Pushes acc[N - j] (local SE_J is 8 j). */
+static int se_mirror(Sink *s) {
+  return op2(s, OP_LOCAL_GET, SE_ACC) && i32_const(s, 8u * TFHE_POLY_N) && op2(s, OP_LOCAL_GET, SE_J) &&
+         put_byte(s, OP_I32_SUB) && put_byte(s, OP_I32_ADD) && mem_at(s, OP_I64_LOAD, 0);
+}
+
+static int part_tfhe_sample_extract(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 0) && op2(s, OP_LOCAL_GET, SE_OUT) && op2(s, OP_LOCAL_GET, SE_ACC) &&
+         mem_at(s, OP_I64_LOAD, 0) && mem_at(s, OP_I64_STORE, 0) && i32_const(s, 8) && op2(s, OP_LOCAL_SET, SE_J) &&
+         loop_head(s) && add_locals(s, SE_OUT, SE_J) && i64_const(s, 0) && se_mirror(s) && put_byte(s, OP_I64_SUB) &&
+         mem_at(s, OP_I64_STORE, 0) && loop_tail(s, SE_J, 0, 8, 0, 8u * TFHE_POLY_N) &&
+         op2(s, OP_LOCAL_GET, SE_OUT) && op2(s, OP_LOCAL_GET, SE_ACC) && mem_at(s, OP_I64_LOAD, 8u * TFHE_POLY_N) &&
+         mem_at(s, OP_I64_STORE, 8u * TFHE_BIG_N) && put_byte(s, OP_END);
+}
+
+/* keyswitch (out, in), i32: the LWE of IN under the small key, as
+   tfhe_keyswitch: the digits of each mask word (at TFHE_DIGITS) times the
+   KSK rows at TFHE_KSK; a zero digit skips its row. */
+enum { KS_OUT, KS_IN, KS_J, KS_L, KS_ROW, KS_I, KS_DIGIT };
+
+static int part_tfhe_keyswitch(Sink *s, const void *arg) {
+  (void)arg;
+  return typed_locals(s, KS_DIGIT - KS_J, 1, TYPE_I64) && op2(s, OP_LOCAL_GET, KS_OUT) &&
+         i32_const(s, TFHE_LWE_N) && op2(s, OP_CALL, TFHE_ZERO) && op2(s, OP_LOCAL_GET, KS_OUT) &&
+         op2(s, OP_LOCAL_GET, KS_IN) && mem_at(s, OP_I64_LOAD, 8u * TFHE_BIG_N) &&
+         mem_at(s, OP_I64_STORE, 8u * TFHE_LWE_N) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, KS_J) && loop_head(s) &&
+         word_at(s, KS_IN, KS_J) && mem_at(s, OP_I64_LOAD, 0) && i64_const(s, TFHE_KS_BASE_LOG) &&
+         i64_const(s, TFHE_KS_LEVEL) && i64_const(s, TFHE_DIGITS) && op2(s, OP_CALL, TFHE_DECOMPOSE) &&
+         i32_const(s, 0) && op2(s, OP_LOCAL_SET, KS_L) && loop_head(s) && op2(s, OP_LOCAL_GET, KS_J) &&
+         i32_const(s, TFHE_KS_LEVEL) && put_byte(s, OP_I32_MUL) && op2(s, OP_LOCAL_GET, KS_L) &&
+         put_byte(s, OP_I32_ADD) && i32_const(s, TFHE_KSK_ROW) && put_byte(s, OP_I32_MUL) && i32_const(s, TFHE_KSK) &&
+         put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_SET, KS_ROW) && op2(s, OP_LOCAL_GET, KS_L) && i32_const(s, 3) &&
+         put_byte(s, OP_I32_SHL) && mem_at(s, OP_I64_LOAD, TFHE_DIGITS) && op2(s, OP_LOCAL_TEE, KS_DIGIT) &&
+         i64_const(s, 0) && put_byte(s, OP_I64_NE) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) &&
+         i32_const(s, 0) && op2(s, OP_LOCAL_SET, KS_I) && loop_head(s) && add_locals(s, KS_OUT, KS_I) &&
+         add_locals(s, KS_OUT, KS_I) && mem_at(s, OP_I64_LOAD, 0) && op2(s, OP_LOCAL_GET, KS_DIGIT) &&
+         add_locals(s, KS_ROW, KS_I) && mem_at(s, OP_I64_LOAD, 0) && put_byte(s, OP_I64_MUL) &&
+         put_byte(s, OP_I64_SUB) && mem_at(s, OP_I64_STORE, 0) && loop_tail(s, KS_I, 0, 8, 0, TFHE_KSK_ROW) &&
+         put_byte(s, OP_END) && loop_tail(s, KS_L, 0, 1, 0, TFHE_KS_LEVEL) &&
+         loop_tail(s, KS_J, 0, 1, 0, TFHE_BIG_N) && put_byte(s, OP_END);
+}
+
+/* modulus_switch (out, in), i32: the mask words of IN rounded to 2N, the
+   body corrected by the sum of the halved errors, as tfhe_modulus_switch
+   (i64.div_s is the C division, to zero). */
+enum { MS_OUT, MS_IN, MS_I, MS_SW, MS_ERR, MS_HALF, MS_SUM, MS_SHD };
+
+static int part_tfhe_modulus_switch(Sink *s, const void *arg) {
+  const uint64_t shift = 64u - TFHE_LOG_2N;
+  const uint64_t half_case = (uint64_t)1 << (shift - 1u);
+  (void)arg;
+  return typed_locals(s, 1, MS_SHD + 1u - MS_SW, TYPE_I64) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, MS_I) &&
+         loop_head(s) && add_locals(s, MS_IN, MS_I) && mem_at(s, OP_I64_LOAD, 0) && i64_const(s, half_case) &&
+         put_byte(s, OP_I64_ADD) && i64_const(s, shift) && put_byte(s, OP_I64_SHR_U) && op2(s, OP_LOCAL_SET, MS_SW) &&
+         op2(s, OP_LOCAL_GET, MS_SW) && i64_const(s, shift) && put_byte(s, OP_I64_SHL) &&
+         add_locals(s, MS_IN, MS_I) && mem_at(s, OP_I64_LOAD, 0) && put_byte(s, OP_I64_SUB) &&
+         op2(s, OP_LOCAL_TEE, MS_ERR) && i64_const(s, 2) && put_byte(s, OP_I64_DIV_S) && op2(s, OP_LOCAL_SET, MS_HALF) &&
+         op2(s, OP_LOCAL_GET, MS_SHD) && i64_const(s, 2) && op2(s, OP_LOCAL_GET, MS_HALF) && put_byte(s, OP_I64_MUL) &&
+         op2(s, OP_LOCAL_GET, MS_ERR) && put_byte(s, OP_I64_SUB) && put_byte(s, OP_I64_ADD) &&
+         op2(s, OP_LOCAL_SET, MS_SHD) && op2(s, OP_LOCAL_GET, MS_SUM) && op2(s, OP_LOCAL_GET, MS_HALF) &&
+         put_byte(s, OP_I64_ADD) && op2(s, OP_LOCAL_SET, MS_SUM) && add_locals(s, MS_OUT, MS_I) &&
+         op2(s, OP_LOCAL_GET, MS_SW) && mem_at(s, OP_I64_STORE, 0) && loop_tail(s, MS_I, 0, 8, 0, 8u * TFHE_LWE_N) &&
+         op2(s, OP_LOCAL_GET, MS_SUM) && op2(s, OP_LOCAL_GET, MS_SHD) && i64_const(s, 2) &&
+         put_byte(s, OP_I64_DIV_S) && put_byte(s, OP_I64_SUB) && op2(s, OP_LOCAL_SET, MS_SUM) &&
+         op2(s, OP_LOCAL_GET, MS_OUT) && op2(s, OP_LOCAL_GET, MS_IN) && mem_at(s, OP_I64_LOAD, 8u * TFHE_LWE_N) &&
+         op2(s, OP_LOCAL_GET, MS_SUM) && i64_const(s, half_case) && put_byte(s, OP_I64_SUB) &&
+         put_byte(s, OP_I64_ADD) && i64_const(s, half_case) && put_byte(s, OP_I64_ADD) && i64_const(s, shift) &&
+         put_byte(s, OP_I64_SHR_U) && mem_at(s, OP_I64_STORE, 8u * TFHE_LWE_N) && put_byte(s, OP_END);
+}
+
+/* Pushes the i32 constant BASE + local L. */
+static int const_plus(Sink *s, uint32_t base, uint32_t l) {
+  return i32_const(s, base) && op2(s, OP_LOCAL_GET, l) && put_byte(s, OP_I32_ADD);
+}
+
+/* cmux (acc, i, a), i32: the loop body of tfhe_blind_rotate for the mask
+   word i (a != 0), in the C order. For p < 2: DIFF_p := X^a ACC_p; each
+   word of DIFF_p := digit 0 of decompose (DIFF_p[j] - ACC_p[j]); FA_p :=
+   forward (DIFF_p). For t < 2: ACC_F := 0; for p < 2: mul_add (ACC_F, FA_p,
+   the BSK row (i, p, t)); backward_add (ACC_t, ACC_F). P and T are the byte
+   offsets 0x4000 p and 0x4000 t, X is P + J. The row (i, p, t) is at
+   TFHE_BSK + 0x4000 (4i + 2p + t) = TFHE_BSK + (i << 16) + 2P + T. */
+enum { CM_ACC, CM_I, CM_A, CM_P, CM_J, CM_X, CM_T, CM_ROW };
+
+static int part_tfhe_cmux(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, CM_ROW + 1u - CM_P, 0) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, CM_P) && loop_head(s) &&
+         const_plus(s, TFHE_DIFF, CM_P) && add_locals(s, CM_ACC, CM_P) && op2(s, OP_LOCAL_GET, CM_A) &&
+         op2(s, OP_CALL, TFHE_MONOMIAL) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, CM_J) && loop_head(s) &&
+         add_locals(s, CM_P, CM_J) && op2(s, OP_LOCAL_TEE, CM_X) && mem_at(s, OP_I64_LOAD, TFHE_DIFF) &&
+         add_locals(s, CM_ACC, CM_X) && mem_at(s, OP_I64_LOAD, 0) && put_byte(s, OP_I64_SUB) &&
+         i64_const(s, TFHE_PBS_BASE_LOG) && i64_const(s, TFHE_PBS_LEVEL) && i64_const(s, TFHE_DIGITS) &&
+         op2(s, OP_CALL, TFHE_DECOMPOSE) && op2(s, OP_LOCAL_GET, CM_X) && i32_const(s, 0) &&
+         mem_at(s, OP_I64_LOAD, TFHE_DIGITS) && mem_at(s, OP_I64_STORE, TFHE_DIFF) &&
+         loop_tail(s, CM_J, 0, 8, 0, 8u * TFHE_POLY_N) && const_plus(s, TFHE_FA, CM_P) &&
+         const_plus(s, TFHE_DIFF, CM_P) && op2(s, OP_CALL, TFHE_FORWARD) &&
+         loop_tail(s, CM_P, 0, 8u * TFHE_POLY_N, 0, 16u * TFHE_POLY_N) && i32_const(s, 0) &&
+         op2(s, OP_LOCAL_SET, CM_T) && loop_head(s) && i32_const(s, TFHE_ACC_F) && i32_const(s, TFHE_POLY_N) &&
+         op2(s, OP_CALL, TFHE_ZERO) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, CM_P) && loop_head(s) &&
+         op2(s, OP_LOCAL_GET, CM_I) && i32_const(s, 16) && put_byte(s, OP_I32_SHL) && op2(s, OP_LOCAL_GET, CM_P) &&
+         i32_const(s, 1) && put_byte(s, OP_I32_SHL) && put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_GET, CM_T) &&
+         put_byte(s, OP_I32_ADD) && i32_const(s, TFHE_BSK) && put_byte(s, OP_I32_ADD) &&
+         op2(s, OP_LOCAL_SET, CM_ROW) && i32_const(s, TFHE_ACC_F) && const_plus(s, TFHE_FA, CM_P) &&
+         op2(s, OP_LOCAL_GET, CM_ROW) && op2(s, OP_LOCAL_GET, CM_ROW) && i32_const(s, TFHE_HALF) &&
+         put_byte(s, OP_I32_ADD) && op2(s, OP_CALL, TFHE_MUL_ADD) &&
+         loop_tail(s, CM_P, 0, 8u * TFHE_POLY_N, 0, 16u * TFHE_POLY_N) && add_locals(s, CM_ACC, CM_T) &&
+         i32_const(s, TFHE_ACC_F) && op2(s, OP_CALL, TFHE_BACKWARD_ADD) &&
+         loop_tail(s, CM_T, 0, 8u * TFHE_POLY_N, 0, 16u * TFHE_POLY_N) && put_byte(s, OP_END);
+}
+
+/* blind_rotate (acc, switched, lut), i32: as tfhe_blind_rotate. ACC := (0,
+   X^power LUT) with power = 2N - body, or 0 when body = 0 (a select on the
+   body); then a cmux for each mask word a != 0. */
+enum { ROT_ACC, ROT_SW, ROT_LUT, ROT_BODY, ROT_I, ROT_A };
+
+static int part_tfhe_blind_rotate(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, ROT_A + 1u - ROT_BODY, 0) && op2(s, OP_LOCAL_GET, ROT_SW) &&
+         mem_at(s, OP_I64_LOAD, 8u * TFHE_LWE_N) && put_byte(s, OP_I32_WRAP_I64) && op2(s, OP_LOCAL_SET, ROT_BODY) &&
+         op2(s, OP_LOCAL_GET, ROT_ACC) && i32_const(s, TFHE_POLY_N) && op2(s, OP_CALL, TFHE_ZERO) &&
+         op2(s, OP_LOCAL_GET, ROT_ACC) && i32_const(s, 8u * TFHE_POLY_N) && put_byte(s, OP_I32_ADD) &&
+         op2(s, OP_LOCAL_GET, ROT_LUT) && i32_const(s, 2u * TFHE_POLY_N) && op2(s, OP_LOCAL_GET, ROT_BODY) &&
+         put_byte(s, OP_I32_SUB) && i32_const(s, 0) && op2(s, OP_LOCAL_GET, ROT_BODY) && put_byte(s, OP_SELECT) &&
+         op2(s, OP_CALL, TFHE_MONOMIAL) && i32_const(s, 0) && op2(s, OP_LOCAL_SET, ROT_I) && loop_head(s) &&
+         word_at(s, ROT_SW, ROT_I) && mem_at(s, OP_I64_LOAD, 0) && put_byte(s, OP_I32_WRAP_I64) &&
+         op2(s, OP_LOCAL_TEE, ROT_A) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) &&
+         op2(s, OP_LOCAL_GET, ROT_ACC) && op2(s, OP_LOCAL_GET, ROT_I) && op2(s, OP_LOCAL_GET, ROT_A) &&
+         op2(s, OP_CALL, TFHE_CMUX) && put_byte(s, OP_END) && loop_tail(s, ROT_I, 0, 1, 0, TFHE_LWE_N) &&
+         put_byte(s, OP_END);
+}
+
+/* pbs (out, in, lut), i32: as tfhe_pbs, with the scratch at TFHE_SMALL,
+   TFHE_SWITCHED and TFHE_ACC. */
+static int part_tfhe_bootstrap(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 0, 0) && i32_const(s, TFHE_SMALL) && op2(s, OP_LOCAL_GET, 1) &&
+         op2(s, OP_CALL, TFHE_KEYSWITCH) && i32_const(s, TFHE_SWITCHED) && i32_const(s, TFHE_SMALL) &&
+         op2(s, OP_CALL, TFHE_MODULUS_SWITCH) && i32_const(s, TFHE_ACC) && i32_const(s, TFHE_SWITCHED) &&
+         op2(s, OP_LOCAL_GET, 2) && op2(s, OP_CALL, TFHE_BLIND_ROTATE) && op2(s, OP_LOCAL_GET, 0) &&
+         i32_const(s, TFHE_ACC) && op2(s, OP_CALL, TFHE_SAMPLE_EXTRACT) && put_byte(s, OP_END);
+}
+
+/* S5 U3b: the radix kernels of src/front/tfhe.c, in the C order. A radix is
+   TFHE_RADIX_BLOCKS blocks of TFHE_BLOCK_BYTES; LUT id is at TFHE_RLUT +
+   0x4000 id. The params are locals RAD_A .. RAD_C, the first i32 local
+   after them is RAD_C (2 params) or RAD_I (3 params). */
+enum { RAD_A, RAD_B, RAD_C, RAD_I };
+
+/* Pushes the address of LUT ID. */
+static int rlut(Sink *s, unsigned id) {
+  return i32_const(s, TFHE_RLUT + 0x4000u * id);
+}
+
+/* (dst, src): dst += src, word by word, over BYTES. */
+static int add_words_body(Sink *s, uint32_t bytes) {
+  return tfhe_locals(s, 1, 0) && loop_head(s) && add_locals(s, RAD_A, RAD_C) && add_locals(s, RAD_A, RAD_C) &&
+         mem_at(s, OP_I64_LOAD, 0) && add_locals(s, RAD_B, RAD_C) && mem_at(s, OP_I64_LOAD, 0) &&
+         put_byte(s, OP_I64_ADD) && mem_at(s, OP_I64_STORE, 0) && loop_tail(s, RAD_C, 0, 8, 0, bytes) &&
+         put_byte(s, OP_END);
+}
+
+/* block_add (dst, src): tfhe_block_add. */
+static int part_tfhe_block_add(Sink *s, const void *arg) {
+  (void)arg;
+  return add_words_body(s, TFHE_BLOCK_BYTES);
+}
+
+/* radix_acc (dst, src): radix_add_blocks. */
+static int part_tfhe_radix_acc(Sink *s, const void *arg) {
+  (void)arg;
+  return add_words_body(s, TFHE_RADIX_BYTES);
+}
+
+/* block_scale (dst, c), c i64: tfhe_block_scale. */
+static int part_tfhe_block_scale(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 0) && loop_head(s) && add_locals(s, RAD_A, RAD_C) && add_locals(s, RAD_A, RAD_C) &&
+         mem_at(s, OP_I64_LOAD, 0) && op2(s, OP_LOCAL_GET, RAD_B) && put_byte(s, OP_I64_MUL) &&
+         mem_at(s, OP_I64_STORE, 0) && loop_tail(s, RAD_C, 0, 8, 0, TFHE_BLOCK_BYTES) && put_byte(s, OP_END);
+}
+
+/* block_pair (h, l): block_pair into TFHE_RIN (4 h + l). */
+static int part_tfhe_block_pair(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 0, 0) && i32_const(s, TFHE_RIN) && i32_const(s, TFHE_BLOCK_WORDS) && op2(s, OP_CALL, TFHE_ZERO) && i32_const(s, TFHE_RIN) &&
+         op2(s, OP_LOCAL_GET, RAD_A) && op2(s, OP_CALL, TFHE_BLOCK_ADD) && i32_const(s, TFHE_RIN) &&
+         i64_const(s, TFHE_MSG_MOD) && op2(s, OP_CALL, TFHE_BLOCK_SCALE) && i32_const(s, TFHE_RIN) &&
+         op2(s, OP_LOCAL_GET, RAD_B) && op2(s, OP_CALL, TFHE_BLOCK_ADD) && put_byte(s, OP_END);
+}
+
+/* propagate (r): tfhe_radix_propagate. The MSG PBS of block i goes in place:
+   the PBS reads its input (the key switch) before it writes its output. */
+enum { PROP_R, PROP_J, PROP_P };
+
+static int part_tfhe_propagate(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 2, 0) && loop_head(s) && op2(s, OP_LOCAL_GET, PROP_R) && op2(s, OP_LOCAL_GET, PROP_J) &&
+         i32_const(s, TFHE_BLOCK_BYTES) && put_byte(s, OP_I32_MUL) && put_byte(s, OP_I32_ADD) &&
+         op2(s, OP_LOCAL_SET, PROP_P) && i32_const(s, TFHE_RCARRY) && op2(s, OP_LOCAL_GET, PROP_P) &&
+         rlut(s, TFHE_LUT_CARRY) && op2(s, OP_CALL, TFHE_PBS) && op2(s, OP_LOCAL_GET, PROP_P) &&
+         op2(s, OP_LOCAL_GET, PROP_P) && rlut(s, TFHE_LUT_MSG) && op2(s, OP_CALL, TFHE_PBS) &&
+         op2(s, OP_LOCAL_GET, PROP_P) && i32_const(s, TFHE_BLOCK_BYTES) && put_byte(s, OP_I32_ADD) &&
+         i32_const(s, TFHE_RCARRY) && op2(s, OP_CALL, TFHE_BLOCK_ADD) &&
+         loop_tail(s, PROP_J, 0, 1, 0, TFHE_RADIX_BLOCKS - 1u) && op2(s, OP_LOCAL_GET, PROP_R) &&
+         i32_const(s, (TFHE_RADIX_BLOCKS - 1u) * TFHE_BLOCK_BYTES) && put_byte(s, OP_I32_ADD) &&
+         op2(s, OP_LOCAL_TEE, PROP_P) && op2(s, OP_LOCAL_GET, PROP_P) && rlut(s, TFHE_LUT_MSG) &&
+         op2(s, OP_CALL, TFHE_PBS) && put_byte(s, OP_END);
+}
+
+/* radix_add (out, x, y): tfhe_radix_add (out := 0 + x, as the memcpy). */
+static int part_tfhe_radix_add(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 0, 0) && op2(s, OP_LOCAL_GET, RAD_A) && i32_const(s, TFHE_RADIX_WORDS) &&
+         op2(s, OP_CALL, TFHE_ZERO) && op2(s, OP_LOCAL_GET, RAD_A) && op2(s, OP_LOCAL_GET, RAD_B) &&
+         op2(s, OP_CALL, TFHE_RADIX_ACC) && op2(s, OP_LOCAL_GET, RAD_A) && op2(s, OP_LOCAL_GET, RAD_C) &&
+         op2(s, OP_CALL, TFHE_RADIX_ACC) && op2(s, OP_LOCAL_GET, RAD_A) && op2(s, OP_CALL, TFHE_PROPAGATE) &&
+         put_byte(s, OP_END);
+}
+
+/* radix_scalar_mul (out, bit, a), a i64: tfhe_radix_scalar_mul; a shifts
+   right by 2 for each block. */
+static int part_tfhe_radix_scalar_mul(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 0) && loop_head(s) && add_locals(s, RAD_A, RAD_I) && i32_const(s, TFHE_BLOCK_WORDS) &&
+         op2(s, OP_CALL, TFHE_ZERO) && add_locals(s, RAD_A, RAD_I) && op2(s, OP_LOCAL_GET, RAD_B) &&
+         op2(s, OP_CALL, TFHE_BLOCK_ADD) && add_locals(s, RAD_A, RAD_I) && op2(s, OP_LOCAL_GET, RAD_C) &&
+         i64_const(s, TFHE_MSG_MOD - 1u) && put_byte(s, OP_I64_AND) && op2(s, OP_CALL, TFHE_BLOCK_SCALE) &&
+         op2(s, OP_LOCAL_GET, RAD_C) && i64_const(s, 2) && put_byte(s, OP_I64_SHR_U) &&
+         op2(s, OP_LOCAL_SET, RAD_C) && loop_tail(s, RAD_I, 0, TFHE_BLOCK_BYTES, 0, TFHE_RADIX_BYTES) &&
+         put_byte(s, OP_END);
+}
+
+/* radix_le (out, x, y): tfhe_radix_le with TFHE_RIN, TFHE_RCMP and
+   TFHE_RACC as in, cmp and acc; RAD_I is the offset of block i - 1, and
+   block 0 (offset 0) takes LE in place of MERGE (a select). */
+static int part_tfhe_radix_le(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 0) && i32_const(s, (TFHE_RADIX_BLOCKS - 1u) * TFHE_BLOCK_BYTES) &&
+         op2(s, OP_LOCAL_TEE, RAD_I) && op2(s, OP_LOCAL_GET, RAD_B) && put_byte(s, OP_I32_ADD) &&
+         add_locals(s, RAD_C, RAD_I) && op2(s, OP_CALL, TFHE_BLOCK_PAIR) && i32_const(s, TFHE_RACC) &&
+         i32_const(s, TFHE_RIN) && rlut(s, TFHE_LUT_CMP) && op2(s, OP_CALL, TFHE_PBS) && loop_head(s) &&
+         op2(s, OP_LOCAL_GET, RAD_I) && i32_const(s, TFHE_BLOCK_BYTES) && put_byte(s, OP_I32_SUB) &&
+         op2(s, OP_LOCAL_SET, RAD_I) && add_locals(s, RAD_B, RAD_I) && add_locals(s, RAD_C, RAD_I) &&
+         op2(s, OP_CALL, TFHE_BLOCK_PAIR) && i32_const(s, TFHE_RCMP) && i32_const(s, TFHE_RIN) &&
+         rlut(s, TFHE_LUT_CMP) && op2(s, OP_CALL, TFHE_PBS) && i32_const(s, TFHE_RACC) && i32_const(s, TFHE_RCMP) && op2(s, OP_CALL, TFHE_BLOCK_PAIR) &&
+         i32_const(s, TFHE_RACC) && i32_const(s, TFHE_RIN) && rlut(s, TFHE_LUT_MERGE) && rlut(s, TFHE_LUT_LE) &&
+         op2(s, OP_LOCAL_GET, RAD_I) && put_byte(s, OP_SELECT) && op2(s, OP_CALL, TFHE_PBS) &&
+         op2(s, OP_LOCAL_GET, RAD_I) && op2(s, OP_BR_IF, 0) && put_byte(s, OP_END) && op2(s, OP_LOCAL_GET, RAD_A) &&
+         i32_const(s, TFHE_BLOCK_WORDS) && op2(s, OP_CALL, TFHE_ZERO) && op2(s, OP_LOCAL_GET, RAD_A) &&
+         i32_const(s, TFHE_RACC) && op2(s, OP_CALL, TFHE_BLOCK_ADD) && put_byte(s, OP_END);
+}
+
+/* radix_sum (out, xs, n): tfhe_radix_sum over N radixes at XS, one after
+   the other; a propagation when i % 3 = 0 or at the last term. */
+static int part_tfhe_radix_sum(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_locals(s, 1, 0) && op2(s, OP_LOCAL_GET, RAD_A) && i32_const(s, TFHE_RADIX_WORDS) &&
+         op2(s, OP_CALL, TFHE_ZERO) && op2(s, OP_LOCAL_GET, RAD_A) && op2(s, OP_LOCAL_GET, RAD_B) &&
+         op2(s, OP_CALL, TFHE_RADIX_ACC) && i32_const(s, 1) && op2(s, OP_LOCAL_TEE, RAD_I) &&
+         op2(s, OP_LOCAL_GET, RAD_C) && put_byte(s, OP_I32_LT_U) && put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) &&
+         loop_head(s) && op2(s, OP_LOCAL_GET, RAD_A) && op2(s, OP_LOCAL_GET, RAD_B) && op2(s, OP_LOCAL_GET, RAD_I) &&
+         i32_const(s, TFHE_RADIX_BYTES) && put_byte(s, OP_I32_MUL) && put_byte(s, OP_I32_ADD) &&
+         op2(s, OP_CALL, TFHE_RADIX_ACC) && op2(s, OP_LOCAL_GET, RAD_I) && i32_const(s, 3) &&
+         put_byte(s, OP_I32_REM_U) && put_byte(s, OP_I32_EQZ) && op2(s, OP_LOCAL_GET, RAD_I) && i32_const(s, 1) &&
+         put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_GET, RAD_C) && put_byte(s, OP_I32_EQ) && put_byte(s, OP_I32_OR) &&
+         put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) && op2(s, OP_LOCAL_GET, RAD_A) &&
+         op2(s, OP_CALL, TFHE_PROPAGATE) && put_byte(s, OP_END) && loop_tail(s, RAD_I, 0, 1, 1, RAD_C) &&
+         put_byte(s, OP_END) && put_byte(s, OP_END);
+}
+
+/* The entries (the stream ABI of Q-S3-7; a wrong n traps): local 1 is h =
+   8n, the block [M, the M words]. */
+static int tfhe_entry_head(Sink *s, uint64_t n, uint64_t m) {
+  return i64_locals(s, 1) && count_guard(s, n) && heap_local(s) && base_of(s, 1) && i64_const(s, m) &&
+         memarg(s, OP_I64_STORE, 0);
+}
+
+/* Pushes h + 8, the address of the first output word. */
+static int tfhe_out(Sink *s) {
+  return base_of(s, 1) && i32_const(s, 8) && put_byte(s, OP_I32_ADD);
+}
+
+/* Calls F (A, B) on two i32 constants. */
+static int tfhe_call2(Sink *s, uint32_t f, uint32_t a, uint32_t b) {
+  return i32_const(s, a) && i32_const(s, b) && op2(s, OP_CALL, f);
+}
+
+/* An entry of N input words and M output words that calls F (h + 8, 0). */
+static int tfhe_entry_call(Sink *s, uint64_t n, uint64_t m, uint32_t f) {
+  return tfhe_entry_head(s, n, m) && tfhe_out(s) && i32_const(s, 0) && op2(s, OP_CALL, f) &&
+         op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+/* fft: [poly] -> [the bits of fft_forward (poly): re, then im]. */
+static int part_tfhe_fft(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_call(s, TFHE_POLY_N, TFHE_POLY_N, TFHE_FORWARD);
+}
+
+/* ifft: [the bits of a TfheFourier: re, then im] -> [fft_backward_add into
+   zeros]. */
+static int part_tfhe_ifft(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_head(s, TFHE_POLY_N, TFHE_POLY_N) && tfhe_out(s) && i32_const(s, TFHE_POLY_N) &&
+         op2(s, OP_CALL, TFHE_ZERO) && tfhe_out(s) && i32_const(s, 0) && op2(s, OP_CALL, TFHE_BACKWARD_ADD) &&
+         op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+/* polymul: [a, b] -> [tfhe_poly_mul_fft (a, b)], with FA, FB, ACC_F as fa,
+   fb and acc. */
+static int part_tfhe_polymul(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_head(s, 2u * TFHE_POLY_N, TFHE_POLY_N) && tfhe_call2(s, TFHE_FORWARD, TFHE_FA, 0) &&
+         tfhe_call2(s, TFHE_FORWARD, TFHE_FB, 8u * TFHE_POLY_N) && tfhe_call2(s, TFHE_ZERO, TFHE_ACC_F, TFHE_POLY_N) &&
+         i32_const(s, TFHE_ACC_F) && i32_const(s, TFHE_FA) && i32_const(s, TFHE_FB) &&
+         i32_const(s, TFHE_FB + TFHE_HALF) && op2(s, OP_CALL, TFHE_MUL_ADD) && tfhe_out(s) &&
+         i32_const(s, TFHE_POLY_N) && op2(s, OP_CALL, TFHE_ZERO) && tfhe_out(s) && i32_const(s, TFHE_ACC_F) &&
+         op2(s, OP_CALL, TFHE_BACKWARD_ADD) && op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+/* ks: [an LWE under the big key] -> [keyswitch]; ms: [an LWE under the
+   small key] -> [modulus_switch]; se: [a GLWE, mask then body] ->
+   [sample_extract]. The KSK is at TFHE_KSK (run-wasm.mjs `--load`). */
+static int part_tfhe_ks(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_call(s, TFHE_BIG_N + 1u, TFHE_LWE_N + 1u, TFHE_KEYSWITCH);
+}
+
+static int part_tfhe_ms(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_call(s, TFHE_LWE_N + 1u, TFHE_LWE_N + 1u, TFHE_MODULUS_SWITCH);
+}
+
+static int part_tfhe_se(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_call(s, 2u * TFHE_POLY_N, TFHE_BIG_N + 1u, TFHE_SAMPLE_EXTRACT);
+}
+
+/* An entry of N input words and M output words that calls F (h + 8, 0,
+   8 L0): the LUT comes after the first input of L0 words. */
+static int tfhe_entry_lut(Sink *s, uint64_t n, uint64_t m, uint32_t l0, uint32_t f) {
+  return tfhe_entry_head(s, n, m) && tfhe_out(s) && i32_const(s, 0) && i32_const(s, 8u * l0) && op2(s, OP_CALL, f) &&
+         op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+/* br: [switched, lut] -> [blind_rotate: mask, then body]; pbs: [an LWE under
+   the big key, lut] -> [tfhe_pbs]. The BSK is at TFHE_BSK (run-wasm.mjs
+   `--load`). */
+static int part_tfhe_br(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_lut(s, TFHE_LWE_N + 1u + TFHE_POLY_N, 2u * TFHE_POLY_N, TFHE_LWE_N + 1u, TFHE_BLIND_ROTATE);
+}
+
+static int part_tfhe_pbs(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_lut(s, TFHE_BIG_N + 1u + TFHE_POLY_N, TFHE_BIG_N + 1u, TFHE_BIG_N + 1u, TFHE_PBS);
+}
+
+/* S5 U3b, the radix entries (test module only; the U4 lowering calls the
+   kernels): radd [x, y] -> [radix], rmul [bit, a] -> [radix], rle [x, y] ->
+   [block], rsum4 [x1 .. x4] and rsum5 [x1 .. x5] -> [radix]. */
+static int part_tfhe_radd(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_lut(s, 2u * TFHE_RADIX_WORDS, TFHE_RADIX_WORDS, TFHE_RADIX_WORDS, TFHE_RADIX_ADD);
+}
+
+static int part_tfhe_rmul(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_head(s, TFHE_BLOCK_WORDS + 1u, TFHE_RADIX_WORDS) && tfhe_out(s) && i32_const(s, 0) &&
+         i32_const(s, TFHE_BLOCK_BYTES) && mem_at(s, OP_I64_LOAD, 0) && op2(s, OP_CALL, TFHE_RADIX_SCALAR_MUL) &&
+         op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+static int part_tfhe_rle(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_lut(s, 2u * TFHE_RADIX_WORDS, TFHE_BLOCK_WORDS, TFHE_RADIX_WORDS, TFHE_RADIX_LE);
+}
+
+/* An entry of N radixes that calls radix_sum (h + 8, 0, N). */
+static int tfhe_entry_sum(Sink *s, uint32_t n) {
+  return tfhe_entry_head(s, (uint64_t)n * TFHE_RADIX_WORDS, TFHE_RADIX_WORDS) && tfhe_out(s) && i32_const(s, 0) &&
+         i32_const(s, n) && op2(s, OP_CALL, TFHE_RADIX_SUM) && op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+static int part_tfhe_rsum4(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_sum(s, 4);
+}
+
+static int part_tfhe_rsum5(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_sum(s, 5);
+}
+
+/* S5 U4b, the circuit entries of front/fhe.h at N 7 (test module only). The
+   stream input is the radix inputs, the block inputs, then the parameters;
+   the output is the out registers in order. The registers are at TFHE_FRADIX
+   and TFHE_FBLOCK. */
+static uint32_t fhe_addr(const FheCircuit *c, FheReg r) {
+  switch (r.slot) {
+  case FHE_RADIX_IN:
+    return r.index * TFHE_RADIX_BYTES;
+  case FHE_BLOCK_IN:
+    return c->radix_ins * TFHE_RADIX_BYTES + r.index * TFHE_BLOCK_BYTES;
+  case FHE_RADIX_REG:
+    return TFHE_FRADIX + r.index * TFHE_RADIX_BYTES;
+  case FHE_BLOCK_REG:
+    return TFHE_FBLOCK + r.index * TFHE_BLOCK_BYTES;
+  }
+  return 0;
+}
+
+/* The byte offset of parameter P. */
+static uint32_t fhe_param_at(const FheCircuit *c, uint64_t p) {
+  return c->radix_ins * TFHE_RADIX_BYTES + c->block_ins * TFHE_BLOCK_BYTES + 8u * (uint32_t)p;
+}
+
+/* Pushes the clear V (i64). */
+static int fhe_clear(Sink *s, const FheCircuit *c, FheClear v) {
+  switch (v.kind) {
+  case FHE_LIT:
+    return i64_const(s, v.value);
+  case FHE_PARAM:
+    return i32_const(s, 0) && mem_at(s, OP_I64_LOAD, fhe_param_at(c, v.value));
+  case FHE_NEG_PARAM:
+    return i64_const(s, 0) && i32_const(s, 0) && mem_at(s, OP_I64_LOAD, fhe_param_at(c, v.value)) &&
+           put_byte(s, OP_I64_SUB);
+  }
+  return 0;
+}
+
+/* Calls F (A, B, C) on three i32 constants. */
+static int tfhe_call3(Sink *s, uint32_t f, uint32_t a, uint32_t b, uint32_t c) {
+  return i32_const(s, a) && tfhe_call2(s, f, b, c);
+}
+
+/* The code of statement T: the U3b kernels on the registers. PAIR and BADD
+   start from 0 + a (the memcpy of fhe_eval); the TFHE_BLOCK_PAIR kernel
+   writes TFHE_RIN, so PAIR does not use it. The 7 circuits have no REFRESH
+   (0: no entry). */
+static int fhe_stmt(Sink *s, const FheCircuit *c, const FheStmt *t) {
+  const uint32_t dst = fhe_addr(c, t->dst), a = fhe_addr(c, t->a), b = fhe_addr(c, t->b);
+  switch (t->op) {
+  case FHE_TRIVIAL:
+    return i32_const(s, dst) && i32_const(s, TFHE_FONE) && fhe_clear(s, c, t->c) &&
+           op2(s, OP_CALL, TFHE_RADIX_SCALAR_MUL);
+  case FHE_RMUL:
+    return i32_const(s, dst) && i32_const(s, a) && fhe_clear(s, c, t->c) && op2(s, OP_CALL, TFHE_RADIX_SCALAR_MUL);
+  case FHE_RADD:
+    return tfhe_call3(s, TFHE_RADIX_ADD, dst, a, b);
+  case FHE_RSUM:
+    return tfhe_call3(s, TFHE_RADIX_SUM, dst, a, t->count);
+  case FHE_RLE:
+    return tfhe_call3(s, TFHE_RADIX_LE, dst, a, b);
+  case FHE_PAIR:
+    return tfhe_call2(s, TFHE_ZERO, dst, TFHE_BLOCK_WORDS) && tfhe_call2(s, TFHE_BLOCK_ADD, dst, a) &&
+           i32_const(s, dst) && i64_const(s, TFHE_MSG_MOD) && op2(s, OP_CALL, TFHE_BLOCK_SCALE) &&
+           tfhe_call2(s, TFHE_BLOCK_ADD, dst, b);
+  case FHE_LUT:
+    return tfhe_call3(s, TFHE_PBS, dst, a, TFHE_FLUT + 8u * TFHE_POLY_N * t->lut);
+  case FHE_BADD:
+    return tfhe_call2(s, TFHE_ZERO, dst, TFHE_BLOCK_WORDS) && tfhe_call2(s, TFHE_BLOCK_ADD, dst, a) &&
+           tfhe_call2(s, TFHE_BLOCK_ADD, dst, b);
+  case FHE_REFRESH:
+    return 0;
+  }
+  return 0;
+}
+
+static int fhe_is_radix(FheReg r) {
+  return r.slot == FHE_RADIX_IN || r.slot == FHE_RADIX_REG;
+}
+
+/* Pushes h + 8 + O. */
+static int fhe_out_at(Sink *s, uint32_t o) {
+  return tfhe_out(s) && i32_const(s, o) && put_byte(s, OP_I32_ADD);
+}
+
+/* An entry of circuit KIND at N 7: the statements in order, then each out
+   register into the output (zero, then add). 0 when the build fails. */
+static int tfhe_entry_fhe(Sink *s, FheKind kind) {
+  static FheCircuit c;
+  uint64_t n, m = 0;
+  uint32_t o = 0;
+  unsigned i;
+  int ok;
+  if (!fhe_build(&c, kind, 7)) return 0;
+  n = (uint64_t)c.radix_ins * TFHE_RADIX_WORDS + (uint64_t)c.block_ins * TFHE_BLOCK_WORDS + c.params;
+  for (i = 0; i < c.outs; i++) m += fhe_is_radix(c.out[i]) ? TFHE_RADIX_WORDS : TFHE_BLOCK_WORDS;
+  ok = tfhe_entry_head(s, n, m);
+  for (i = 0; i < c.stmts && ok; i++) ok = fhe_stmt(s, &c, &c.stmt[i]);
+  for (i = 0; i < c.outs && ok; i++) {
+    const int radix = fhe_is_radix(c.out[i]);
+    ok = fhe_out_at(s, o) && i32_const(s, radix ? TFHE_RADIX_WORDS : TFHE_BLOCK_WORDS) && op2(s, OP_CALL, TFHE_ZERO) &&
+         fhe_out_at(s, o) && i32_const(s, fhe_addr(&c, c.out[i])) &&
+         op2(s, OP_CALL, radix ? TFHE_RADIX_ACC : TFHE_BLOCK_ADD);
+    o += radix ? TFHE_RADIX_BYTES : TFHE_BLOCK_BYTES;
+  }
+  return ok && op2(s, OP_LOCAL_GET, 1) && put_byte(s, OP_END);
+}
+
+static int part_tfhe_tally4(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_TALLY4);
+}
+
+static int part_tfhe_tally3(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_TALLY3);
+}
+
+static int part_tfhe_theta(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_THETA);
+}
+
+static int part_tfhe_settle(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_SETTLE);
+}
+
+static int part_tfhe_credit(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_CREDIT);
+}
+
+static int part_tfhe_withdraw(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_WITHDRAW);
+}
+
+static int part_tfhe_amd(Sink *s, const void *arg) {
+  (void)arg;
+  return tfhe_entry_fhe(s, FHE_AMD);
+}
+
+/* S5 U5c: expand [mask 2048, body, j] -> [the LWE of tfhe_pke_expand]:
+   out[i] = mask[(i - j) mod N], negated when i < j; out[N] = body. Its own
+   loop, not TFHE_MONOMIAL. The locals after n: h (i64), i and j (i32). */
+enum { EX_H = 1, EX_I, EX_J };
+
+/* Pushes mask[(i - j) mod N]. */
+static int expand_load(Sink *s) {
+  return op2(s, OP_LOCAL_GET, EX_I) && op2(s, OP_LOCAL_GET, EX_J) && put_byte(s, OP_I32_SUB) &&
+         i32_const(s, TFHE_POLY_N - 1u) && put_byte(s, OP_I32_AND) && i32_const(s, 3) && put_byte(s, OP_I32_SHL) &&
+         mem_at(s, OP_I64_LOAD, 0);
+}
+
+static int part_tfhe_expand(Sink *s, const void *arg) {
+  (void)arg;
+  return put_uleb(s, 2) && put_uleb(s, 1) && put_byte(s, TYPE_I64) && put_uleb(s, 2) && put_byte(s, TYPE_I32) &&
+         count_guard(s, TFHE_POLY_N + 2u) && heap_local(s) && base_of(s, EX_H) && i64_const(s, TFHE_BIG_N + 1u) &&
+         memarg(s, OP_I64_STORE, 0) && i32_const(s, 0) && mem_at(s, OP_I64_LOAD, 8u * (TFHE_POLY_N + 1u)) &&
+         put_byte(s, OP_I32_WRAP_I64) && op2(s, OP_LOCAL_SET, EX_J) && i32_const(s, 0) &&
+         op2(s, OP_LOCAL_SET, EX_I) && loop_head(s) && tfhe_out(s) && op2(s, OP_LOCAL_GET, EX_I) &&
+         i32_const(s, 3) && put_byte(s, OP_I32_SHL) && put_byte(s, OP_I32_ADD) && i64_const(s, 0) &&
+         expand_load(s) && put_byte(s, OP_I64_SUB) && expand_load(s) && op2(s, OP_LOCAL_GET, EX_I) &&
+         op2(s, OP_LOCAL_GET, EX_J) && put_byte(s, OP_I32_LT_U) && put_byte(s, OP_SELECT) &&
+         mem_at(s, OP_I64_STORE, 0) && loop_tail(s, EX_I, 0, 1, 0, TFHE_POLY_N) && tfhe_out(s) &&
+         i32_const(s, 0) && mem_at(s, OP_I64_LOAD, 8u * TFHE_POLY_N) && mem_at(s, OP_I64_STORE, 8u * TFHE_POLY_N) &&
+         op2(s, OP_LOCAL_GET, EX_H) && put_byte(s, OP_END);
+}
+
+/* Types: 0 (i32, i32) -> (), 1 (i32 x 4) -> (), 2 (f64) -> i64, 3 the
+   entries (i64) -> i64, 4 (i64 x 4) -> (), 5 (i32 x 3) -> (); S5 U3b: 6
+   (i32, i64) -> (), 7 (i32, i32, i64) -> (), 8 (i32) -> (). */
+static const unsigned char tfhe_test_types[TFHE_FUNCS] = {0, 0, 0, 1, 0, 2, 0, 4, 5, 0, 0, 0, 5, 5, 5, 0, 0, 6, 0,
+                                                          8, 5, 7, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+                                                          3, 3, 3, 3, 3, 3, 3, 3};
+
+/* A func type of N32 i32 params, then one i64 param, no result. */
+static int i32_i64_func(Sink *s, unsigned n32) {
+  unsigned k;
+  int ok = put_byte(s, TYPE_FUNC) && put_uleb(s, n32 + 1u);
+  for (k = 0; k < n32 && ok; k++) ok = put_byte(s, TYPE_I32);
+  return ok && put_byte(s, TYPE_I64) && put_uleb(s, 0);
+}
+
+static int part_tfhe_types(Sink *s, const void *arg) {
+  (void)arg;
+  return put_uleb(s, 9) && typed_func(s, 2, TYPE_I32, 0) && typed_func(s, 4, TYPE_I32, 0) &&
+         typed_func(s, 1, TYPE_F64, 1) && typed_func(s, 1, TYPE_I64, 1) && typed_func(s, 4, TYPE_I64, 0) &&
+         typed_func(s, 3, TYPE_I32, 0) && i32_i64_func(s, 1) && i32_i64_func(s, 2) && typed_func(s, 1, TYPE_I32, 0);
+}
+
+static int part_tfhe_functions(Sink *s, const void *arg) {
+  size_t i;
+  int ok = put_uleb(s, TFHE_FUNCS);
+  (void)arg;
+  for (i = 0; i < TFHE_FUNCS && ok; i++) ok = put_uleb(s, tfhe_test_types[i]);
+  return ok;
+}
+
+static int part_tfhe_memory(Sink *s, const void *arg) {
+  (void)arg;
+  return put_uleb(s, 1) && put_byte(s, 1) && put_uleb(s, TFHE_PAGES) && put_uleb(s, WASM_MAX_PAGES);
+}
+
+static int part_tfhe_exports(Sink *s, const void *arg) {
+  static const char *const names[TFHE_ENTRIES] = {"fft", "ifft", "polymul", "ks", "ms", "se", "br", "pbs", "radd", "rmul", "rle", "rsum4", "rsum5",
+                                                  "tally4", "tally3", "theta", "settle", "credit", "withdraw", "amd",
+                                                  "expand"};
+  unsigned i;
+  int ok = put_uleb(s, TFHE_ENTRIES + 1u);
+  (void)arg;
+  for (i = 0; i < TFHE_ENTRIES && ok; i++)
+    ok = put_name(s, names[i]) && put_byte(s, 0) && put_uleb(s, TFHE_ENTRY_FFT + i);
+  return ok && put_name(s, "memory") && put_byte(s, 2) && put_uleb(s, 0);
+}
+
+static int part_tfhe_code(Sink *s, const void *arg) {
+  static const Part parts[TFHE_FUNCS] = {
+    part_tfhe_dif,         part_tfhe_dit_inverse, part_tfhe_forward,        part_tfhe_mul_add,
+    part_tfhe_backward_add, part_tfhe_from_double, part_tfhe_zero,          part_tfhe_decompose,
+    part_tfhe_monomial,    part_tfhe_sample_extract, part_tfhe_keyswitch,   part_tfhe_modulus_switch,
+    part_tfhe_cmux,        part_tfhe_blind_rotate, part_tfhe_bootstrap,
+    part_tfhe_block_add,   part_tfhe_radix_acc,   part_tfhe_block_scale,    part_tfhe_block_pair,
+    part_tfhe_propagate,   part_tfhe_radix_add,   part_tfhe_radix_scalar_mul, part_tfhe_radix_le,
+    part_tfhe_radix_sum,
+    part_tfhe_fft,         part_tfhe_ifft,        part_tfhe_polymul,        part_tfhe_ks,
+    part_tfhe_ms,          part_tfhe_se,          part_tfhe_br,          part_tfhe_pbs,
+    part_tfhe_radd,        part_tfhe_rmul,        part_tfhe_rle,            part_tfhe_rsum4,
+    part_tfhe_rsum5,       part_tfhe_tally4,      part_tfhe_tally3,         part_tfhe_theta,
+    part_tfhe_settle,      part_tfhe_credit,      part_tfhe_withdraw,       part_tfhe_amd,
+    part_tfhe_expand};
+  size_t i;
+  int ok = put_uleb(s, TFHE_FUNCS);
+  (void)arg;
+  for (i = 0; i < TFHE_FUNCS && ok; i++) ok = sized(s, parts[i], NULL);
+  return ok;
+}
+
+/* Writes the N words of V, each low byte first. */
+static int put_u64s(Sink *s, const uint64_t *v, size_t n) {
+  size_t i;
+  unsigned k;
+  int ok = 1;
+  for (i = 0; i < n && ok; i++) {
+    for (k = 0; k < 8 && ok; k++) ok = put_byte(s, (unsigned)(v[i] >> (8u * k)) & 0xFFu);
+  }
+  return ok;
+}
+
+/* Four active segments: the tables of tfhe_fft_init at TFHE_BASE in the
+   TfheFft order, then (S5 U3b) the LUTs of tfhe_radix_luts at TFHE_RLUT, then
+   (S5 U4b) the LUTs of fhe_luts at TFHE_FLUT and the body word of the trivial
+   block of 1 at TFHE_FONE. */
+static int part_tfhe_data(Sink *s, const void *arg) {
+  static TfheRadixLuts l;
+  static FheLuts fl;
+  const uint64_t one = tfhe_encode(1);
+  const TfheFft *f = arg;
+  tfhe_radix_luts(&l);
+  fhe_luts(&fl);
+  return put_uleb(s, 4) && put_uleb(s, 0) && i32_const(s, TFHE_BASE) && put_byte(s, OP_END) &&
+         put_uleb(s, sizeof f->twist_re + sizeof f->twist_im + sizeof f->root_re + sizeof f->root_im) &&
+         put_doubles(s, f->twist_re, TFHE_FFT_M) && put_doubles(s, f->twist_im, TFHE_FFT_M) &&
+         put_doubles(s, f->root_re, TFHE_FFT_M / 2) && put_doubles(s, f->root_im, TFHE_FFT_M / 2) &&
+         put_uleb(s, 0) && i32_const(s, TFHE_RLUT) && put_byte(s, OP_END) && put_uleb(s, sizeof l.lut) &&
+         put_u64s(s, l.lut[0], (size_t)TFHE_LUTS * TFHE_POLY_N) && put_uleb(s, 0) && i32_const(s, TFHE_FLUT) &&
+         put_byte(s, OP_END) && put_uleb(s, sizeof fl.lut) && put_u64s(s, fl.lut[0], (size_t)FHE_LUTS * TFHE_POLY_N) &&
+         put_uleb(s, 0) && i32_const(s, TFHE_FONE + 8 * TFHE_BIG_N) && put_byte(s, OP_END) &&
+         put_uleb(s, sizeof one) && put_u64s(s, &one, 1);
+}
+
+int wasm_write_tfhe_test(FILE *out, FILE *err) {
+  Sink s = {out, 0, err};
+  TfheFft f;
+  size_t i;
+  int ok = 1;
+  tfhe_fft_init(&f);
+  for (i = 0; i < sizeof header && ok; i++) ok = put_byte(&s, header[i]);
+  ok = ok && section(&s, SECTION_TYPE, part_tfhe_types, NULL) &&
+       section(&s, SECTION_FUNCTION, part_tfhe_functions, NULL) && section(&s, SECTION_MEMORY, part_tfhe_memory, NULL) &&
+       section(&s, SECTION_EXPORT, part_tfhe_exports, NULL) && section(&s, SECTION_CODE, part_tfhe_code, NULL) &&
+       section(&s, SECTION_DATA, part_tfhe_data, &f);
+  if (!ok && ferror(out)) fputs("langc: IO: -: cannot write the wasm tfhe module\n", err);
+  return ok;
+}
+
+/* S5 U5c: the TFHE client module (build/tfhe-client.wasm): the public-key
+   ballot encryption of tfhe_pke_encrypt, with no server keys. Wasm has no
+   imports: the host gives the 32 seed bytes as 4 words (the low byte
+   first), and the Wasm DRBG copies tfhe_drbg_bytes byte for byte with the
+   SHA-512 kernel (block c = the SHA-512 of the seed and of c as 8 bytes,
+   little endian). Memory: the stream input and the output block below
+   CLIENT_DIN; then the DRBG input (its last word is the counter), the used
+   count, the block and the SHA-512 scratch; then rev(r) and c. */
+enum {
+  CLIENT_K = TFHE_PLAIN,
+  CLIENT_PK_A = 8 * 4,
+  CLIENT_PK_B = CLIENT_PK_A + 8 * TFHE_POLY_N,
+  CLIENT_M = CLIENT_PK_B + 8 * TFHE_POLY_N,
+  CLIENT_IN = 4 + 2 * TFHE_POLY_N + CLIENT_K,
+  CLIENT_OUT = TFHE_POLY_N + CLIENT_K,
+  CLIENT_DIN = 0x10000,
+  CLIENT_COUNTER = CLIENT_DIN + TFHE_SEED_BYTES,
+  CLIENT_USED = CLIENT_COUNTER + 8,
+  CLIENT_BLOCK = CLIENT_DIN + 0x40,
+  CLIENT_SCRATCH = CLIENT_DIN + 0x80,
+  CLIENT_REV = CLIENT_DIN + 0x1000,
+  CLIENT_C = CLIENT_REV + 8 * TFHE_POLY_N,
+  CLIENT_PAGES = (CLIENT_C + 8 * TFHE_POLY_N + 0xFFFF) / 0x10000
+};
+
+enum { CLIENT_SHA512, CLIENT_DRBG_BYTES, CLIENT_TUNIFORM, CLIENT_POLY, CLIENT_ENTRY_PKENC, CLIENT_FUNCS };
+
+/* Types: 0 (i32 x 3) -> (), 1 (i32) -> i64, 2 (i64 x 4) -> (), 3 the entry
+   (i64) -> i64. */
+static const unsigned char client_types[CLIENT_FUNCS] = {2, 1, 1, 0, 3};
+
+/* drbg_bytes (n) -> i64, n in 1 .. 8: the next N DRBG bytes, the first in
+   the low byte, as tfhe_drbg_bytes (a new block when 64 bytes are used). */
+enum { CD_N, CD_I, CD_W, CD_USED };
+
+static int part_client_drbg_bytes(Sink *s, const void *arg) {
+  (void)arg;
+  return typed_locals(s, 1, 2, TYPE_I64) && loop_head(s) && i32_const(s, 0) && mem_at(s, OP_I64_LOAD, CLIENT_USED) &&
+         op2(s, OP_LOCAL_TEE, CD_USED) && i64_const(s, SHA512_BYTES) && put_byte(s, OP_I64_EQ) &&
+         put_byte(s, OP_IF) && put_byte(s, TYPE_EMPTY) && i64_const(s, CLIENT_DIN) &&
+         i64_const(s, TFHE_SEED_BYTES + 8) && i64_const(s, CLIENT_BLOCK) && i64_const(s, CLIENT_SCRATCH) &&
+         op2(s, OP_CALL, CLIENT_SHA512) && i32_const(s, 0) && i32_const(s, 0) &&
+         mem_at(s, OP_I64_LOAD, CLIENT_COUNTER) && i64_const(s, 1) && put_byte(s, OP_I64_ADD) &&
+         mem_at(s, OP_I64_STORE, CLIENT_COUNTER) && i64_const(s, 0) && op2(s, OP_LOCAL_SET, CD_USED) &&
+         put_byte(s, OP_END) && op2(s, OP_LOCAL_GET, CD_W) && op2(s, OP_LOCAL_GET, CD_USED) &&
+         put_byte(s, OP_I32_WRAP_I64) && put_byte(s, OP_I64_LOAD8_U) && put_uleb(s, 0) && put_uleb(s, CLIENT_BLOCK) &&
+         op2(s, OP_LOCAL_GET, CD_I) && i32_const(s, 3) && put_byte(s, OP_I32_SHL) &&
+         put_byte(s, OP_I64_EXTEND_I32_U) && put_byte(s, OP_I64_SHL) && put_byte(s, OP_I64_OR) &&
+         op2(s, OP_LOCAL_SET, CD_W) && i32_const(s, 0) && op2(s, OP_LOCAL_GET, CD_USED) && i64_const(s, 1) &&
+         put_byte(s, OP_I64_ADD) && mem_at(s, OP_I64_STORE, CLIENT_USED) && loop_tail(s, CD_I, 0, 1, 1, CD_N) &&
+         op2(s, OP_LOCAL_GET, CD_W) && put_byte(s, OP_END);
+}
+
+/* tuniform (bound_log) -> i64, as tfhe_tuniform: (bound_log + 9) / 8 bytes
+   masked to bound_log + 2 bits, then r / 2 + (r and 1) - 2^bound_log. */
+enum { CT_LOG, CT_R };
+
+static int part_client_tuniform(Sink *s, const void *arg) {
+  (void)arg;
+  return typed_locals(s, 0, 1, TYPE_I64) && op2(s, OP_LOCAL_GET, CT_LOG) && i32_const(s, 9) &&
+         put_byte(s, OP_I32_ADD) && i32_const(s, 3) && put_byte(s, OP_I32_SHR_U) &&
+         op2(s, OP_CALL, CLIENT_DRBG_BYTES) && i64_const(s, 1) && op2(s, OP_LOCAL_GET, CT_LOG) &&
+         put_byte(s, OP_I64_EXTEND_I32_U) && i64_const(s, 2) && put_byte(s, OP_I64_ADD) && put_byte(s, OP_I64_SHL) &&
+         i64_const(s, 1) && put_byte(s, OP_I64_SUB) && put_byte(s, OP_I64_AND) && op2(s, OP_LOCAL_TEE, CT_R) &&
+         i64_const(s, 1) && put_byte(s, OP_I64_SHR_U) && op2(s, OP_LOCAL_GET, CT_R) && i64_const(s, 1) &&
+         put_byte(s, OP_I64_AND) && put_byte(s, OP_I64_ADD) && i64_const(s, 1) && op2(s, OP_LOCAL_GET, CT_LOG) &&
+         put_byte(s, OP_I64_EXTEND_I32_U) && put_byte(s, OP_I64_SHL) && put_byte(s, OP_I64_SUB) && put_byte(s, OP_END);
+}
+
+/* poly (out, a, b), i32 byte addresses: the exact negacyclic product of
+   tfhe_poly_mul_exact (schoolbook, i64 wrapping): out[k] = the sum over i
+   of a[i] b[k - i], with b[k - i + N] subtracted for i > k. */
+enum { CP_OUT, CP_A, CP_B, CP_K, CP_I, CP_ACC, CP_T };
+
+static int part_client_poly(Sink *s, const void *arg) {
+  (void)arg;
+  return typed_locals(s, 2, 2, TYPE_I64) && loop_head(s) && i64_const(s, 0) && op2(s, OP_LOCAL_SET, CP_ACC) &&
+         i32_const(s, 0) && op2(s, OP_LOCAL_SET, CP_I) && loop_head(s) && word_at(s, CP_A, CP_I) &&
+         mem_at(s, OP_I64_LOAD, 0) && op2(s, OP_LOCAL_GET, CP_B) && op2(s, OP_LOCAL_GET, CP_K) &&
+         op2(s, OP_LOCAL_GET, CP_I) && put_byte(s, OP_I32_SUB) && i32_const(s, TFHE_POLY_N - 1u) &&
+         put_byte(s, OP_I32_AND) && i32_const(s, 3) && put_byte(s, OP_I32_SHL) && put_byte(s, OP_I32_ADD) &&
+         mem_at(s, OP_I64_LOAD, 0) && put_byte(s, OP_I64_MUL) && op2(s, OP_LOCAL_SET, CP_T) &&
+         op2(s, OP_LOCAL_GET, CP_ACC) && op2(s, OP_LOCAL_GET, CP_T) && put_byte(s, OP_I64_SUB) &&
+         op2(s, OP_LOCAL_GET, CP_ACC) && op2(s, OP_LOCAL_GET, CP_T) && put_byte(s, OP_I64_ADD) &&
+         op2(s, OP_LOCAL_GET, CP_K) && op2(s, OP_LOCAL_GET, CP_I) && put_byte(s, OP_I32_LT_U) &&
+         put_byte(s, OP_SELECT) && op2(s, OP_LOCAL_SET, CP_ACC) && loop_tail(s, CP_I, 0, 1, 0, TFHE_POLY_N) &&
+         word_at(s, CP_OUT, CP_K) && op2(s, OP_LOCAL_GET, CP_ACC) && mem_at(s, OP_I64_STORE, 0) &&
+         loop_tail(s, CP_K, 0, 1, 0, TFHE_POLY_N) && put_byte(s, OP_END);
+}
+
+/* pkenc [seed 4, pk_a 2048, pk_b 2048, m 16] -> [mask 2048, body 16], as
+   tfhe_pke_encrypt from a fresh DRBG: r (one byte a bit, stored reversed),
+   mask = pk_a rev(r) + e1, c = pk_b rev(r), body_j = c[N - 1 - j] + e2_j +
+   m_j 2^59. The locals after n: h (i64), j and an address (i32). */
+enum { CE_H = 1, CE_J, CE_AT };
+
+/* j := 0, then a loop head. */
+static int client_loop(Sink *s) {
+  return i32_const(s, 0) && op2(s, OP_LOCAL_SET, CE_J) && loop_head(s);
+}
+
+/* Pushes the byte offset 8 j. */
+static int client_j8(Sink *s) {
+  return op2(s, OP_LOCAL_GET, CE_J) && i32_const(s, 3) && put_byte(s, OP_I32_SHL);
+}
+
+static int part_client_pkenc(Sink *s, const void *arg) {
+  unsigned w;
+  int ok = put_uleb(s, 2) && put_uleb(s, 1) && put_byte(s, TYPE_I64) && put_uleb(s, 2) && put_byte(s, TYPE_I32) &&
+           count_guard(s, CLIENT_IN) && heap_local(s) && base_of(s, CE_H) && i64_const(s, CLIENT_OUT) &&
+           memarg(s, OP_I64_STORE, 0);
+  (void)arg;
+  for (w = 0; w < TFHE_SEED_BYTES / 8u && ok; w++)
+    ok = i32_const(s, 0) && i32_const(s, 0) && mem_at(s, OP_I64_LOAD, 8u * w) &&
+         mem_at(s, OP_I64_STORE, CLIENT_DIN + 8u * w);
+  return ok && i32_const(s, 0) && i64_const(s, 0) && mem_at(s, OP_I64_STORE, CLIENT_COUNTER) && i32_const(s, 0) &&
+         i64_const(s, SHA512_BYTES) && mem_at(s, OP_I64_STORE, CLIENT_USED) && client_loop(s) &&
+         i32_const(s, CLIENT_REV + 8u * (TFHE_POLY_N - 1u)) && client_j8(s) && put_byte(s, OP_I32_SUB) &&
+         i32_const(s, 1) && op2(s, OP_CALL, CLIENT_DRBG_BYTES) && i64_const(s, 1) && put_byte(s, OP_I64_AND) &&
+         mem_at(s, OP_I64_STORE, 0) && loop_tail(s, CE_J, 0, 1, 0, TFHE_POLY_N) && tfhe_out(s) &&
+         i32_const(s, CLIENT_PK_A) && i32_const(s, CLIENT_REV) && op2(s, OP_CALL, CLIENT_POLY) && client_loop(s) &&
+         tfhe_out(s) && client_j8(s) && put_byte(s, OP_I32_ADD) && op2(s, OP_LOCAL_TEE, CE_AT) &&
+         op2(s, OP_LOCAL_GET, CE_AT) && mem_at(s, OP_I64_LOAD, 0) && i32_const(s, TFHE_PKE_NOISE) &&
+         op2(s, OP_CALL, CLIENT_TUNIFORM) && put_byte(s, OP_I64_ADD) && mem_at(s, OP_I64_STORE, 0) &&
+         loop_tail(s, CE_J, 0, 1, 0, TFHE_POLY_N) && i32_const(s, CLIENT_C) && i32_const(s, CLIENT_PK_B) &&
+         i32_const(s, CLIENT_REV) && op2(s, OP_CALL, CLIENT_POLY) && client_loop(s) && tfhe_out(s) && client_j8(s) &&
+         put_byte(s, OP_I32_ADD) && i32_const(s, CLIENT_C + 8u * (TFHE_POLY_N - 1u)) && client_j8(s) &&
+         put_byte(s, OP_I32_SUB) && mem_at(s, OP_I64_LOAD, 0) && i32_const(s, TFHE_PKE_NOISE) &&
+         op2(s, OP_CALL, CLIENT_TUNIFORM) && put_byte(s, OP_I64_ADD) && client_j8(s) &&
+         mem_at(s, OP_I64_LOAD, CLIENT_M) && i64_const(s, TFHE_DELTA_LOG) && put_byte(s, OP_I64_SHL) &&
+         put_byte(s, OP_I64_ADD) && mem_at(s, OP_I64_STORE, 8u * TFHE_POLY_N) &&
+         loop_tail(s, CE_J, 0, 1, 0, CLIENT_K) && op2(s, OP_LOCAL_GET, CE_H) && put_byte(s, OP_END);
+}
+
+static int part_client_types(Sink *s, const void *arg) {
+  (void)arg;
+  return put_uleb(s, 4) && typed_func(s, 3, TYPE_I32, 0) && typed_func(s, 1, TYPE_I32, 1) && func_type(s, 4, 0) &&
+         typed_func(s, 1, TYPE_I64, 1);
+}
+
+static int part_client_functions(Sink *s, const void *arg) {
+  size_t i;
+  int ok = put_uleb(s, CLIENT_FUNCS);
+  (void)arg;
+  for (i = 0; i < CLIENT_FUNCS && ok; i++) ok = put_uleb(s, client_types[i]);
+  return ok;
+}
+
+static int part_client_memory(Sink *s, const void *arg) {
+  (void)arg;
+  return put_uleb(s, 1) && put_byte(s, 1) && put_uleb(s, CLIENT_PAGES) && put_uleb(s, WASM_MAX_PAGES);
+}
+
+static int part_client_exports(Sink *s, const void *arg) {
+  (void)arg;
+  return put_uleb(s, 2) && put_name(s, "pkenc") && put_byte(s, 0) && put_uleb(s, CLIENT_ENTRY_PKENC) &&
+         put_name(s, "memory") && put_byte(s, 2) && put_uleb(s, 0);
+}
+
+static int part_client_code(Sink *s, const void *arg) {
+  static const Part parts[CLIENT_FUNCS] = {part_sha512, part_client_drbg_bytes, part_client_tuniform,
+                                           part_client_poly, part_client_pkenc};
+  size_t i;
+  int ok = put_uleb(s, CLIENT_FUNCS);
+  (void)arg;
+  for (i = 0; i < CLIENT_FUNCS && ok; i++) ok = sized(s, parts[i], NULL);
+  return ok;
+}
+
+int wasm_write_tfhe_client(FILE *out, FILE *err) {
+  Sink s = {out, 0, err};
+  size_t i;
+  int ok = 1;
+  for (i = 0; i < sizeof header && ok; i++) ok = put_byte(&s, header[i]);
+  ok = ok && section(&s, SECTION_TYPE, part_client_types, NULL) &&
+       section(&s, SECTION_FUNCTION, part_client_functions, NULL) &&
+       section(&s, SECTION_MEMORY, part_client_memory, NULL) &&
+       section(&s, SECTION_EXPORT, part_client_exports, NULL) && section(&s, SECTION_CODE, part_client_code, NULL);
+  if (!ok && ferror(out)) fputs("langc: IO: -: cannot write the wasm tfhe client module\n", err);
   return ok;
 }
 

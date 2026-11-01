@@ -5,6 +5,7 @@
 #include "front/ed25519.h"
 #include "front/poseidon2.h"
 #include "front/sha512.h"
+#include "front/tfhe.h"
 #include "wasm_kernel.h"
 
 #define main langc_main
@@ -882,8 +883,1565 @@ static int frost_regressions(void) {
   return ok;
 }
 
-int main(void) {
+/* The number of bits of X (0 for 0). */
+static unsigned top_bit(uint64_t x) {
+  unsigned bits = 0;
+  while (x != 0) {
+    bits++;
+    x >>= 1;
+  }
+  return bits;
+}
+
+/* Each TUniform(b) value stays in [-2^b, 2^b]. */
+static int tfhe_tuniform_rows(TfheDrbg *d) {
+  static const unsigned bounds[3] = {1, 17, 45};
+  unsigned c, i;
+  for (c = 0; c < 3; c++) {
+    int64_t limit = (int64_t)1 << bounds[c];
+    for (i = 0; i < 4096; i++) {
+      int64_t v = (int64_t)tfhe_tuniform(d, bounds[c]);
+      if (v < -limit || v > limit) {
+        printf("FAIL tfhe tuniform %u\n", bounds[c]);
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+/* The bound on |FFT - schoolbook| for a digit product of the PBS shape. */
+enum { TFHE_FFT_BOUND_BITS = 50 };
+
+/* The FFT product against the exact schoolbook product mod 2^64: equal for
+ * small inputs (|a|, |b| <= 2^10) and for a key product (64-bit a, the 0 or 1
+ * GLWE key); within 2^50 for the PBS shape (|digit| <= 2^22, 64-bit b). */
+static int tfhe_fft_rows(const TfheFft *f, const TfheKeys *k, TfheDrbg *d) {
+  uint64_t a[TFHE_POLY_N], b[TFHE_POLY_N], want[TFHE_POLY_N], got[TFHE_POLY_N], worst = 0;
+  unsigned j;
   int ok = 1;
+  for (j = 0; j < TFHE_POLY_N; j++) {
+    a[j] = tfhe_tuniform(d, 10);
+    b[j] = tfhe_tuniform(d, 10);
+  }
+  tfhe_poly_mul_exact(want, a, b);
+  tfhe_poly_mul_fft(f, got, a, b);
+  if (memcmp(want, got, sizeof want) != 0) {
+    puts("FAIL tfhe fft small product");
+    ok = 0;
+  }
+  for (j = 0; j < TFHE_POLY_N; j++) {
+    a[j] = tfhe_tuniform(d, 22);
+    b[j] = tfhe_uniform(d);
+  }
+  tfhe_poly_mul_exact(want, a, b);
+  tfhe_poly_mul_fft(f, got, a, b);
+  for (j = 0; j < TFHE_POLY_N; j++) {
+    uint64_t e = got[j] - want[j];
+    if (e >> 63) e = 0u - e;
+    if (e > worst) worst = e;
+  }
+  printf("tfhe fft digit product: max error below 2^%u (bound 2^%u)\n", top_bit(worst), TFHE_FFT_BOUND_BITS);
+  if (top_bit(worst) > TFHE_FFT_BOUND_BITS) {
+    puts("FAIL tfhe fft digit product");
+    ok = 0;
+  }
+  for (j = 0; j < TFHE_POLY_N; j++) a[j] = tfhe_uniform(d);
+  tfhe_poly_mul_exact(want, a, k->glwe_key);
+  tfhe_poly_mul_key(f, got, a, &k->glwe_key_fourier);
+  if (memcmp(want, got, sizeof want) != 0) {
+    puts("FAIL tfhe fft key product");
+    ok = 0;
+  }
+  return ok;
+}
+
+/* The KS round trip, then decrypt(PBS(Enc m)) = LUT(m) for all 16 inputs
+ * under the identity LUT and m -> 7m + 3 mod 16. Then the box edges under the
+ * identity LUT: a trivial input (mask 0) has no noise, so its switched phase
+ * is the 2N bin t of its body. Box m holds the bins 128m - 64 to 128m + 63,
+ * so at each inner edge (m = 1 to 15) the bin centers t = 128m - 65 and
+ * t = 128m - 64 give m - 1 and m. A LUT rotation off by one moves each edge
+ * by one bin. */
+static int tfhe_pbs_rows(const TfheFft *f, const TfheKeys *k, TfheDrbg *d) {
+  uint64_t lut[TFHE_POLY_N], in[TFHE_BIG_N + 1], out[TFHE_BIG_N + 1], small[TFHE_LWE_N + 1];
+  uint8_t tables[2][TFHE_PLAIN];
+  unsigned m, c, e, got;
+  int ok = 1;
+  for (m = 0; m < TFHE_PLAIN; m++) {
+    tables[0][m] = (uint8_t)m;
+    tables[1][m] = (uint8_t)((7u * m + 3u) % TFHE_PLAIN);
+  }
+  for (m = 0; m < TFHE_PLAIN; m++) {
+    tfhe_lwe_encrypt(in, k->glwe_key, TFHE_BIG_N, tfhe_encode(m), TFHE_GLWE_NOISE, d);
+    tfhe_keyswitch(small, in, k->ksk);
+    got = tfhe_decode(tfhe_lwe_phase(small, k->lwe_key, TFHE_LWE_N));
+    if (got != m) {
+      printf("FAIL tfhe ks %u: %u\n", m, got);
+      ok = 0;
+    }
+  }
+  for (c = 0; c < 2; c++) {
+    tfhe_lut(lut, tables[c]);
+    for (m = 0; m < TFHE_PLAIN; m++) {
+      tfhe_lwe_encrypt(in, k->glwe_key, TFHE_BIG_N, tfhe_encode(m), TFHE_GLWE_NOISE, d);
+      tfhe_pbs(f, out, in, k, lut);
+      got = tfhe_decode(tfhe_lwe_phase(out, k->glwe_key, TFHE_BIG_N));
+      if (got != tables[c][m]) {
+        printf("FAIL tfhe pbs lut %u input %u: %u\n", c, m, got);
+        ok = 0;
+      }
+    }
+  }
+  tfhe_lut(lut, tables[0]);
+  for (m = 1; m < TFHE_PLAIN; m++) {
+    for (e = 0; e < 2; e++) {
+      uint64_t bin = (uint64_t)(TFHE_BOX * m - 65u + e);
+      memset(in, 0, sizeof in);
+      in[TFHE_BIG_N] = (bin << (64 - TFHE_LOG_2N)) | ((uint64_t)1 << (63 - TFHE_LOG_2N));
+      tfhe_pbs(f, out, in, k, lut);
+      got = tfhe_decode(tfhe_lwe_phase(out, k->glwe_key, TFHE_BIG_N));
+      if (got != tables[0][m - 1u + e]) {
+        printf("FAIL tfhe pbs edge bin %u: %u\n", (unsigned)bin, got);
+        ok = 0;
+      }
+    }
+  }
+  return ok;
+}
+
+/* S5 U1 rows: the keys come from a fixed seed. */
+/* Writes the TFHE kernel test module of src/wasm.c to PATH. */
+static int tfhe_wasm_write(const char *path) {
+  FILE *module = fopen(path, "wb");
+  int ok = module != NULL && wasm_write_tfhe_test(module, stderr);
+  return module != NULL && fclose(module) == 0 && ok;
+}
+
+static void put_words(FILE *out, const uint64_t *w, size_t n) {
+  size_t i;
+  for (i = 0; i < n; i++) fprintf(out, " %llu", (unsigned long long)w[i]);
+}
+
+/* Reads N words into W; 0 when a word is missing (a trap prints `trap`). */
+static int read_words(FILE *in, uint64_t *w, size_t n) {
+  unsigned long long v;
+  size_t i;
+  int ok = 1;
+  for (i = 0; i < n && ok; i++) {
+    ok = fscanf(in, "%llu", &v) == 1;
+    w[i] = ok ? (uint64_t)v : 0;
+  }
+  return ok;
+}
+
+/* 1 when GOT = WANT; else a FAIL line names ROW and the first other word. */
+static int words_equal(const char *row, const uint64_t *got, const uint64_t *want, size_t n) {
+  size_t i = 0;
+  while (i < n && got[i] == want[i]) i++;
+  if (i < n)
+    printf("FAIL tfhe wasm %s: word %u is %llu, want %llu\n", row, (unsigned)i, (unsigned long long)got[i],
+           (unsigned long long)want[i]);
+  return i == n;
+}
+
+/* The re bits, then the im bits of X. */
+static void fourier_bits(const TfheFourier *x, uint64_t bits[TFHE_POLY_N]) {
+  memcpy(bits, x->re, sizeof x->re);
+  memcpy(bits + TFHE_FFT_M, x->im, sizeof x->im);
+}
+
+/* The TFHE kernel test module against the C kernels, word for word: the
+   forward FFT of A, the backward FFT of P = fft(A) x fft(B) into zeros, and
+   tfhe_poly_mul_fft (A, B). A is uniform; B has digits in [-2^22, 2^22) (the
+   PBS shape: the product takes the mod 2^64 branch of torus_from_double). */
+static int tfhe_wasm_rows(const TfheFft *f, TfheDrbg *d) {
+  static const char *const rows[3] = {"forward", "backward", "product"};
+  uint64_t a[TFHE_POLY_N], b[TFHE_POLY_N], p[TFHE_POLY_N], want[3][TFHE_POLY_N], got[TFHE_POLY_N];
+  TfheFourier fa, fb, acc;
+  FILE *in;
+  FILE *out = NULL;
+  unsigned i;
+  int ok = tfhe_wasm_write("build/tfhe-kernel.wasm");
+  for (i = 0; i < TFHE_POLY_N; i++) a[i] = tfhe_uniform(d);
+  for (i = 0; i < TFHE_POLY_N; i++) b[i] = (tfhe_uniform(d) & (((uint64_t)1 << 23) - 1u)) - ((uint64_t)1 << 22);
+  tfhe_fft_forward(f, &fa, a);
+  tfhe_fft_forward(f, &fb, b);
+  memset(&acc, 0, sizeof acc);
+  tfhe_fourier_mul_add(&acc, &fa, fb.re, fb.im);
+  fourier_bits(&fa, want[0]);
+  fourier_bits(&acc, p);
+  memset(want[1], 0, sizeof want[1]);
+  tfhe_fft_backward_add(f, want[1], &acc);
+  tfhe_poly_mul_fft(f, want[2], a, b);
+  in = fopen("build/tfhe-in.txt", "w");
+  if (in != NULL) {
+    fputs("fft", in);
+    put_words(in, a, TFHE_POLY_N);
+    fputs("\nifft", in);
+    put_words(in, p, TFHE_POLY_N);
+    fputs("\npolymul", in);
+    put_words(in, a, TFHE_POLY_N);
+    put_words(in, b, TFHE_POLY_N);
+    fputs("\n", in);
+  }
+  ok = ok && in != NULL && fclose(in) == 0 &&
+       system("node test/run-wasm.mjs --words build/tfhe-kernel.wasm - <build/tfhe-in.txt >build/tfhe-out.txt 2>&1") == 0;
+  if (ok) out = fopen("build/tfhe-out.txt", "r");
+  if (!ok || out == NULL) puts("FAIL tfhe wasm: the module, the input or node failed (build/tfhe-out.txt)");
+  ok = ok && out != NULL;
+  for (i = 0; i < 3 && ok; i++) {
+    ok = read_words(out, got, TFHE_POLY_N);
+    if (!ok) printf("FAIL tfhe wasm %s: fewer than %u words (build/tfhe-out.txt)\n", rows[i], (unsigned)TFHE_POLY_N);
+    ok = ok && words_equal(rows[i], got, want[i], TFHE_POLY_N);
+  }
+  if (out != NULL) fclose(out);
+  if (ok) {
+    puts("tfhe wasm fft: C = Wasm words (forward 2048, backward 2048, product 2048)");
+    remove("build/tfhe-kernel.wasm");
+    remove("build/tfhe-in.txt");
+    remove("build/tfhe-out.txt");
+  }
+  return ok;
+}
+
+/* Writes the N 8-byte words at W (uint64_t words, or the bits of doubles)
+   to PATH, each low byte first (the order of the Wasm memory), through a 64
+   KiB buffer. */
+static int key_write(const char *path, const void *w, size_t n) {
+  static unsigned char buf[65536];
+  const unsigned char *src = w;
+  FILE *out = fopen(path, "wb");
+  uint64_t x;
+  size_t i, j, k, c;
+  int ok = out != NULL;
+  for (i = 0; i < n && ok; i += c) {
+    c = n - i < sizeof buf / 8u ? n - i : sizeof buf / 8u;
+    for (j = 0; j < c; j++) {
+      memcpy(&x, src + 8u * (i + j), sizeof x);
+      for (k = 0; k < 8u; k++) buf[8u * j + k] = (unsigned char)(x >> (8u * k));
+    }
+    ok = fwrite(buf, 8u, c, out) == c;
+  }
+  return out != NULL && fclose(out) == 0 && ok;
+}
+
+/* S5 O4: the PBS time budget in ms, ceil (1.5 x the median) of the first
+   clean run (r2e). The checktool prints the median and the budget and does
+   not FAIL on the time (PLAN O4 takes the budget at the S5 close). The
+   median is over TFHE_PBS_TIMED pbs calls after one warm-up call. */
+enum { TFHE_PBS_BUDGET_MS = 138, TFHE_PBS_TIMED = 9 };
+
+/* The median of the N (odd) values of T; sorts T (an insertion sort). */
+static double median_of(double *t, size_t n) {
+  size_t i, j;
+  double x;
+  for (i = 1; i < n; i++) {
+    x = t[i];
+    for (j = i; j > 0 && t[j - 1] > x; j--) t[j] = t[j - 1];
+    t[j] = x;
+  }
+  return t[n / 2];
+}
+
+/* Reads the `--time` lines of run-wasm.mjs at PATH: the host line, then
+   SKIP + N times. The N times after the first SKIP go to T. */
+static int time_read(const char *path, char arch[32], char node[32], size_t skip, double *t, size_t n) {
+  FILE *in = fopen(path, "r");
+  double x;
+  size_t i;
+  int ok = in != NULL && fscanf(in, "host %31s node %31s", arch, node) == 2;
+  for (i = 0; i < skip + n && ok; i++) {
+    ok = fscanf(in, " time %lf", &x) == 1;
+    if (ok && i >= skip) t[i - skip] = x;
+  }
+  if (in != NULL) fclose(in);
+  return ok;
+}
+
+/* S5 U3b: the node command of the Wasm TFHE rows. The `--load` offsets come
+   from WASM_TFHE_KSK (the BSK follows the KSK words). */
+static const char *tfhe_node_cmd(char *cmd, size_t size, int timed, const char *in, const char *out) {
+  snprintf(cmd, size,
+           "node test/run-wasm.mjs %s--load %lu build/tfhe-ksk.bin --load %lu build/tfhe-bsk.bin "
+           "--words build/tfhe-kernel.wasm - <%s >%s%s",
+           timed ? "--time " : "", (unsigned long)WASM_TFHE_KSK,
+           (unsigned long)WASM_TFHE_KSK + 8ul * (unsigned long)TFHE_KSK_WORDS, in, out,
+           timed ? " 2>build/tfhe-time.txt" : "");
+  return cmd;
+}
+
+/* S5 U2b rows: the PBS kernels of the module against the C kernels, word
+   for word, on one encryption of m = 6 under the identity LUT. Each stage
+   has its own entry, so a FAIL line names the first stage that differs;
+   the Wasm pbs decrypts to LUT (m) = 6. The keys go to the module memory
+   through build/tfhe-ksk.bin (at WASM_TFHE_KSK) and build/tfhe-bsk.bin
+   (the bits of the BSK doubles, at TFHE_BSK); the checktool removes both
+   after the node call. The same call (`--time`, stderr into
+   build/tfhe-time.txt) runs TFHE_PBS_TIMED more pbs lines: the first pbs
+   line is the warm-up (S5 O4). */
+static int tfhe_pbs_wasm_rows(const TfheFft *f, const TfheKeys *k, TfheDrbg *d) {
+  static const char *const rows[5] = {"ks", "ms", "se", "br", "pbs"};
+  static const size_t counts[5] = {TFHE_LWE_N + 1, TFHE_LWE_N + 1, TFHE_BIG_N + 1, 2 * TFHE_POLY_N, TFHE_BIG_N + 1};
+  uint64_t ct[TFHE_BIG_N + 1], small[TFHE_LWE_N + 1], switched[TFHE_LWE_N + 1], lut[TFHE_POLY_N];
+  uint64_t acc[2 * TFHE_POLY_N], extracted[TFHE_BIG_N + 1], pbs[TFHE_BIG_N + 1], got[2 * TFHE_POLY_N];
+  const uint64_t *const want[5] = {small, switched, extracted, acc, pbs};
+  uint8_t table[TFHE_PLAIN];
+  double times[TFHE_PBS_TIMED];
+  char arch[32], node[32], cmd[512];
+  FILE *in;
+  FILE *out = NULL;
+  unsigned i, passed = 0;
+  int ok;
+  for (i = 0; i < TFHE_PLAIN; i++) table[i] = (uint8_t)i;
+  tfhe_lut(lut, table);
+  tfhe_lwe_encrypt(ct, k->glwe_key, TFHE_BIG_N, tfhe_encode(6), TFHE_GLWE_NOISE, d);
+  tfhe_keyswitch(small, ct, k->ksk);
+  tfhe_modulus_switch(switched, small);
+  tfhe_blind_rotate(f, acc, switched, lut, k->bsk_fourier);
+  tfhe_sample_extract(extracted, acc);
+  tfhe_pbs(f, pbs, ct, k, lut);
+  ok = tfhe_wasm_write("build/tfhe-kernel.wasm") && key_write("build/tfhe-ksk.bin", k->ksk, TFHE_KSK_WORDS) &&
+       key_write("build/tfhe-bsk.bin", k->bsk_fourier, TFHE_BSK_FOURIER_DOUBLES);
+  in = fopen("build/tfhe-pbs-in.txt", "w");
+  if (in != NULL) {
+    fputs("ks", in);
+    put_words(in, ct, TFHE_BIG_N + 1);
+    fputs("\nms", in);
+    put_words(in, small, TFHE_LWE_N + 1);
+    fputs("\nse", in);
+    put_words(in, acc, 2 * TFHE_POLY_N);
+    fputs("\nbr", in);
+    put_words(in, switched, TFHE_LWE_N + 1);
+    put_words(in, lut, TFHE_POLY_N);
+    for (i = 0; i <= TFHE_PBS_TIMED; i++) {
+      fputs("\npbs", in);
+      put_words(in, ct, TFHE_BIG_N + 1);
+      put_words(in, lut, TFHE_POLY_N);
+    }
+    fputs("\n", in);
+  }
+  ok = in != NULL && fclose(in) == 0 && ok &&
+       system(tfhe_node_cmd(cmd, sizeof cmd, 1, "build/tfhe-pbs-in.txt", "build/tfhe-pbs-out.txt")) == 0;
+  remove("build/tfhe-ksk.bin");
+  remove("build/tfhe-bsk.bin");
+  if (ok) out = fopen("build/tfhe-pbs-out.txt", "r");
+  if (!ok || out == NULL)
+    puts("FAIL tfhe wasm ks: the module, a key file, the input or node failed (build/tfhe-pbs-out.txt, "
+         "build/tfhe-time.txt)");
+  ok = ok && out != NULL;
+  for (i = 0; i < 5 && ok; i++) {
+    ok = read_words(out, got, counts[i]);
+    if (!ok) printf("FAIL tfhe wasm %s: fewer than %u words (build/tfhe-pbs-out.txt)\n", rows[i], (unsigned)counts[i]);
+    ok = ok && words_equal(rows[i], got, want[i], counts[i]);
+    passed += (unsigned)ok;
+  }
+  if (out != NULL) fclose(out);
+  if (ok && tfhe_decode(tfhe_lwe_phase(got, k->glwe_key, TFHE_BIG_N)) != 6) {
+    puts("FAIL tfhe wasm pbs: the Wasm pbs output does not decrypt to LUT (6) = 6");
+    ok = 0;
+  }
+  if (passed >= 3) puts("tfhe wasm ks: C = Wasm words (ks 919, ms 919, se 2049)");
+  if (ok) puts("tfhe wasm pbs: C = Wasm words (br 4096, pbs 2049), decrypt = LUT(m)");
+  if (ok && !time_read("build/tfhe-time.txt", arch, node, 5, times, TFHE_PBS_TIMED)) {
+    puts("FAIL tfhe wasm pbs time: fewer time lines than calls (build/tfhe-time.txt)");
+    ok = 0;
+  }
+  if (ok) {
+    printf("pbs: %.1f ms (budget %u ms)\npbs host: %s, node %s\n", median_of(times, TFHE_PBS_TIMED),
+           (unsigned)TFHE_PBS_BUDGET_MS, arch, node);
+    remove("build/tfhe-kernel.wasm");
+    remove("build/tfhe-pbs-in.txt");
+    remove("build/tfhe-pbs-out.txt");
+    remove("build/tfhe-time.txt");
+  }
+  return ok;
+}
+
+/* S5 U3a rows: the radix layer in C, after the U1 and U2 rows, so their DRBG
+   stream does not change. The inputs are tfhe_drbg_bytes (D, 8) in row order.
+   A trivial row (level 0) makes real PBS calls (0.1 ms each) and checks each
+   output word: mask 0, body = digit i Delta. An encrypted row (fresh blocks)
+   checks the value and that each block is clean. */
+enum { RADIX_ADD_ROWS = 12, RADIX_LE_ROWS = 14, RADIX_SUM_ROWS = 10, RADIX_MUL_ROWS = 6 };
+
+static TfheRadix radix_in[7], radix_out, radix_want;
+
+/* 1 when GOT is the trivial radix of WANT, word by word. */
+static int radix_exact(const char *op, unsigned row, const TfheRadix *got, uint64_t want, const TfheKeys *k) {
+  tfhe_radix_trivial(&radix_want, want);
+  if (memcmp(got, &radix_want, sizeof radix_want) == 0) return 1;
+  printf("FAIL tfhe radix trivial %s row %u: words differ (value %016llx, want %016llx)\n", op, row,
+         (unsigned long long)tfhe_radix_decrypt(got, k), (unsigned long long)want);
+  return 0;
+}
+
+/* 1 when the le output GOT is the trivial block of WANT, word by word. */
+static int le_exact(unsigned row, const uint64_t got[TFHE_BLOCK_WORDS], unsigned want, const TfheKeys *k) {
+  tfhe_radix_trivial(&radix_want, want);
+  if (memcmp(got, radix_want.block[0], sizeof radix_want.block[0]) == 0) return 1;
+  printf("FAIL tfhe radix trivial le row %u: words differ (value %u, want %u)\n", row,
+         tfhe_decode(tfhe_lwe_phase(got, k->glwe_key, TFHE_BIG_N)), want);
+  return 0;
+}
+
+/* 1 when GOT decrypts to WANT and each block is clean (its decode is digit i). */
+static int radix_clean(const char *op, const TfheRadix *got, uint64_t want, const TfheKeys *k) {
+  uint64_t value = tfhe_radix_decrypt(got, k);
+  unsigned i, dirty = 0;
+  for (i = 0; i < TFHE_RADIX_BLOCKS; i++) {
+    dirty += tfhe_decode(tfhe_lwe_phase(got->block[i], k->glwe_key, TFHE_BIG_N)) != ((want >> (2u * i)) & 3u);
+  }
+  if (value == want && dirty == 0) return 1;
+  printf("FAIL tfhe radix encrypted %s: %016llx, want %016llx, %u blocks not clean\n", op, (unsigned long long)value,
+         (unsigned long long)want, dirty);
+  return 0;
+}
+
+/* (2^64 - 1, 1) is the full carry chain. Then 8 DRBG pairs. */
+static int radix_add_rows(const TfheFft *f, const TfheKeys *k, const TfheRadixLuts *l, TfheDrbg *d) {
+  uint64_t x[RADIX_ADD_ROWS] = {0, UINT64_MAX, UINT64_MAX, UINT64_C(0x5555555555555555)};
+  uint64_t y[RADIX_ADD_ROWS] = {0, 1, UINT64_MAX, UINT64_C(0xAAAAAAAAAAAAAAAA)};
+  unsigned i;
+  int ok = 1;
+  for (i = 4; i < RADIX_ADD_ROWS; i++) {
+    x[i] = tfhe_drbg_bytes(d, 8);
+    y[i] = tfhe_drbg_bytes(d, 8);
+  }
+  for (i = 0; i < RADIX_ADD_ROWS; i++) {
+    tfhe_radix_trivial(&radix_in[0], x[i]);
+    tfhe_radix_trivial(&radix_in[1], y[i]);
+    tfhe_radix_add(f, &radix_out, &radix_in[0], &radix_in[1], k, l);
+    ok &= radix_exact("add", i, &radix_out, x[i] + y[i], k);
+  }
+  return ok;
+}
+
+/* X0 has the low digit 3, so X0 + 1 carries out of block 0: in the row
+   (X0 + 1, X0), the highest block that differs is GT and block 0 is LT (a
+   MERGE with the low block first fails it). Then 8 DRBG pairs. */
+static int radix_le_rows(const TfheFft *f, const TfheKeys *k, const TfheRadixLuts *l, TfheDrbg *d) {
+  const uint64_t x0 = tfhe_drbg_bytes(d, 8) | 3u;
+  uint64_t x[RADIX_LE_ROWS] = {0, 0, UINT64_MAX, x0, x0, x0 + 1u};
+  uint64_t y[RADIX_LE_ROWS] = {0, UINT64_MAX, 0, x0, x0 + 1u, x0};
+  uint64_t out[TFHE_BLOCK_WORDS];
+  unsigned i;
+  int ok = 1;
+  for (i = 6; i < RADIX_LE_ROWS; i++) {
+    x[i] = tfhe_drbg_bytes(d, 8);
+    y[i] = tfhe_drbg_bytes(d, 8);
+  }
+  for (i = 0; i < RADIX_LE_ROWS; i++) {
+    tfhe_radix_trivial(&radix_in[0], x[i]);
+    tfhe_radix_trivial(&radix_in[1], y[i]);
+    tfhe_radix_le(f, out, &radix_in[0], &radix_in[1], k, l);
+    ok &= le_exact(i, out, x[i] <= y[i], k);
+  }
+  return ok;
+}
+
+/* N = 1, 2, 4, 5 and 7 terms of 2^64 - 1, then of DRBG values. */
+static int radix_sum_rows(const TfheFft *f, const TfheKeys *k, const TfheRadixLuts *l, TfheDrbg *d) {
+  static const unsigned terms[5] = {1, 2, 4, 5, 7};
+  uint64_t v, want;
+  unsigned r, j;
+  int ok = 1;
+  for (r = 0; r < RADIX_SUM_ROWS; r++) {
+    want = 0;
+    for (j = 0; j < terms[r % 5u]; j++) {
+      v = r < 5u ? UINT64_MAX : tfhe_drbg_bytes(d, 8);
+      want += v;
+      tfhe_radix_trivial(&radix_in[j], v);
+    }
+    tfhe_radix_sum(f, &radix_out, radix_in, terms[r % 5u], k, l);
+    ok &= radix_exact("sum", r, &radix_out, want, k);
+  }
+  return ok;
+}
+
+/* A trivial BIT of 0 and of 1, A = 0, 2^64 - 1 and a DRBG value. */
+static int radix_mul_rows(const TfheKeys *k, TfheDrbg *d) {
+  const uint64_t a[3] = {0, UINT64_MAX, tfhe_drbg_bytes(d, 8)};
+  uint64_t bit[TFHE_BLOCK_WORDS];
+  unsigned r;
+  int ok = 1;
+  for (r = 0; r < RADIX_MUL_ROWS; r++) {
+    memset(bit, 0, sizeof bit);
+    bit[TFHE_BIG_N] = tfhe_encode(r / 3u);
+    tfhe_radix_scalar_mul(&radix_out, bit, a[r % 3u]);
+    ok &= radix_exact("scalar_mul", r, &radix_out, a[r % 3u] * (r / 3u), k);
+  }
+  return ok;
+}
+
+/* scalar_mul (Enc 0, a) and (Enc 1, a) (0 PBS); the sum of 4 DRBG values (63
+   PBS, the carry-in at level 5); le (x, y) with the high 16 blocks of y =
+   those of x (63 PBS: MERGE with h = EQ, then with h = LT or GT). */
+static int radix_encrypted_rows(const TfheFft *f, const TfheKeys *k, const TfheRadixLuts *l, TfheDrbg *d) {
+  uint64_t bit[TFHE_BLOCK_WORDS], out[TFHE_BLOCK_WORDS], a, x, y, want = 0;
+  unsigned b, j, got;
+  int ok = 1;
+  a = tfhe_drbg_bytes(d, 8);
+  for (b = 0; b < 2; b++) {
+    tfhe_lwe_encrypt(bit, k->glwe_key, TFHE_BIG_N, tfhe_encode(b), TFHE_GLWE_NOISE, d);
+    tfhe_radix_scalar_mul(&radix_out, bit, a);
+    ok &= radix_clean("scalar_mul", &radix_out, a * b, k);
+  }
+  for (j = 0; j < 4; j++) {
+    x = tfhe_drbg_bytes(d, 8);
+    want += x;
+    tfhe_radix_encrypt(&radix_in[j], k, x, d);
+  }
+  tfhe_radix_sum(f, &radix_out, radix_in, 4, k, l);
+  ok &= radix_clean("sum4", &radix_out, want, k);
+  x = tfhe_drbg_bytes(d, 8);
+  y = (x & ~UINT64_C(0xFFFFFFFF)) | (tfhe_drbg_bytes(d, 8) & UINT64_C(0xFFFFFFFF));
+  tfhe_radix_encrypt(&radix_in[0], k, x, d);
+  tfhe_radix_encrypt(&radix_in[1], k, y, d);
+  tfhe_radix_le(f, out, &radix_in[0], &radix_in[1], k, l);
+  got = tfhe_decode(tfhe_lwe_phase(out, k->glwe_key, TFHE_BIG_N));
+  if (got != (unsigned)(x <= y)) {
+    printf("FAIL tfhe radix encrypted le: %u, want %u\n", got, (unsigned)(x <= y));
+    ok = 0;
+  }
+  return ok;
+}
+
+/* S5 U3b rows: the radix kernels of the module against the C radix
+   functions, word for word (one node call, the keys through `--load`), and
+   each Wasm output against its value (so a mutant of C and Wasm together
+   also fails here). The encrypted rows are those of radix_encrypted_rows
+   (new DRBG values); the trivial rows are (2^64 - 1, 1), le (x0 + 1, x0)
+   with the low digit of x0 = 3, and 5 x (2^64 - 1) (a propagation at term 3
+   and at the last term). */
+enum { RADIX_WORDS = TFHE_RADIX_BLOCKS * TFHE_BLOCK_WORDS, RADIX_WASM_ROWS = 7 };
+
+static TfheRadix radix_wasm_want[RADIX_WASM_ROWS], radix_got;
+
+/* One input line: NAME, then the N radixes at XS. */
+static void radix_put(FILE *in, const char *name, const TfheRadix *xs, unsigned n) {
+  fputs(name, in);
+  put_words(in, (const uint64_t *)xs, (size_t)n * RADIX_WORDS);
+  fputs("\n", in);
+}
+
+static void radix_wasm_input(FILE *in, const TfheFft *f, const TfheKeys *k, const TfheRadixLuts *l, TfheDrbg *d,
+                             uint64_t value[RADIX_WASM_ROWS]) {
+  uint64_t bit[TFHE_BLOCK_WORDS], a = tfhe_drbg_bytes(d, 8), x, y;
+  const uint64_t x0 = tfhe_drbg_bytes(d, 8) | 3u;
+  unsigned r, j;
+  for (r = 0; r < 2; r++) {
+    tfhe_lwe_encrypt(bit, k->glwe_key, TFHE_BIG_N, tfhe_encode(r), TFHE_GLWE_NOISE, d);
+    tfhe_radix_scalar_mul(&radix_wasm_want[r], bit, a);
+    value[r] = a * r;
+    fputs("rmul", in);
+    put_words(in, bit, TFHE_BLOCK_WORDS);
+    put_words(in, &a, 1);
+    fputs("\n", in);
+  }
+  value[2] = 0;
+  for (j = 0; j < 4; j++) {
+    x = tfhe_drbg_bytes(d, 8);
+    value[2] += x;
+    tfhe_radix_encrypt(&radix_in[j], k, x, d);
+  }
+  tfhe_radix_sum(f, &radix_wasm_want[2], radix_in, 4, k, l);
+  radix_put(in, "rsum4", radix_in, 4);
+  x = tfhe_drbg_bytes(d, 8);
+  y = (x & ~UINT64_C(0xFFFFFFFF)) | (tfhe_drbg_bytes(d, 8) & UINT64_C(0xFFFFFFFF));
+  tfhe_radix_encrypt(&radix_in[0], k, x, d);
+  tfhe_radix_encrypt(&radix_in[1], k, y, d);
+  tfhe_radix_le(f, radix_wasm_want[3].block[0], &radix_in[0], &radix_in[1], k, l);
+  value[3] = x <= y;
+  radix_put(in, "rle", radix_in, 2);
+  tfhe_radix_trivial(&radix_in[0], UINT64_MAX);
+  tfhe_radix_trivial(&radix_in[1], 1);
+  tfhe_radix_add(f, &radix_wasm_want[4], &radix_in[0], &radix_in[1], k, l);
+  value[4] = 0;
+  radix_put(in, "radd", radix_in, 2);
+  tfhe_radix_trivial(&radix_in[0], x0 + 1u);
+  tfhe_radix_trivial(&radix_in[1], x0);
+  tfhe_radix_le(f, radix_wasm_want[5].block[0], &radix_in[0], &radix_in[1], k, l);
+  value[5] = x0 + 1u <= x0;
+  radix_put(in, "rle", radix_in, 2);
+  for (j = 0; j < 5; j++) tfhe_radix_trivial(&radix_in[j], UINT64_MAX);
+  tfhe_radix_sum(f, &radix_wasm_want[6], radix_in, 5, k, l);
+  value[6] = UINT64_MAX * 5u;
+  radix_put(in, "rsum5", radix_in, 5);
+}
+
+static int tfhe_radix_wasm_rows(const TfheFft *f, const TfheKeys *k, const TfheRadixLuts *l, TfheDrbg *d) {
+  static const char *const names[RADIX_WASM_ROWS] = {"rmul", "rmul", "rsum4", "rle", "radd", "rle", "rsum5"};
+  uint64_t value[RADIX_WASM_ROWS];
+  char cmd[512];
+  FILE *in = fopen("build/tfhe-radix-in.txt", "w");
+  FILE *out = NULL;
+  unsigned r, got;
+  int ok = in != NULL;
+  if (in != NULL) radix_wasm_input(in, f, k, l, d, value);
+  ok = ok && fclose(in) == 0 && tfhe_wasm_write("build/tfhe-kernel.wasm") &&
+       key_write("build/tfhe-ksk.bin", k->ksk, TFHE_KSK_WORDS) &&
+       key_write("build/tfhe-bsk.bin", k->bsk_fourier, TFHE_BSK_FOURIER_DOUBLES) &&
+       system(tfhe_node_cmd(cmd, sizeof cmd, 0, "build/tfhe-radix-in.txt", "build/tfhe-radix-out.txt")) == 0;
+  remove("build/tfhe-ksk.bin");
+  remove("build/tfhe-bsk.bin");
+  remove("build/tfhe-radix-in.txt");
+  if (ok) out = fopen("build/tfhe-radix-out.txt", "r");
+  if (!ok || out == NULL) puts("FAIL tfhe wasm radix: the module, a key file, the input or node failed");
+  ok = ok && out != NULL;
+  for (r = 0; r < RADIX_WASM_ROWS && ok; r++) {
+    const int le = names[r][1] == 'l';
+    const size_t n = le ? TFHE_BLOCK_WORDS : RADIX_WORDS;
+    ok = read_words(out, (uint64_t *)radix_got.block, n);
+    if (!ok) printf("FAIL tfhe wasm radix %s: fewer than %u words\n", names[r], (unsigned)n);
+    ok = ok && words_equal(names[r], (const uint64_t *)radix_got.block, (const uint64_t *)radix_wasm_want[r].block, n);
+    got = ok && le ? tfhe_decode(tfhe_lwe_phase(radix_got.block[0], k->glwe_key, TFHE_BIG_N)) : (unsigned)value[r];
+    if (got != (unsigned)value[r]) printf("FAIL tfhe wasm radix %s row %u: %u, want %u\n", names[r], r, got,
+                                          (unsigned)value[r]);
+    ok = ok && got == (unsigned)value[r] && (le || radix_clean(names[r], &radix_got, value[r], k));
+  }
+  if (out != NULL) fclose(out);
+  remove("build/tfhe-radix-out.txt");
+  if (ok) puts("tfhe wasm radix: C = Wasm (rmul 2, rsum4 1, rle 2, radd 1, rsum5 1; 7 rows)");
+  return ok;
+}
+
+static int tfhe_radix_rows(const TfheFft *f, const TfheKeys *k, TfheDrbg *d) {
+  static TfheRadixLuts l;
+  int ok, enc;
+  tfhe_radix_luts(&l);
+  ok = radix_add_rows(f, k, &l, d);
+  ok &= radix_le_rows(f, k, &l, d);
+  ok &= radix_sum_rows(f, k, &l, d);
+  ok &= radix_mul_rows(k, d);
+  if (ok) {
+    printf("tfhe radix trivial: %d rows (add %d, le %d, sum %d, scalar_mul %d)\n",
+           RADIX_ADD_ROWS + RADIX_LE_ROWS + RADIX_SUM_ROWS + RADIX_MUL_ROWS, RADIX_ADD_ROWS, RADIX_LE_ROWS,
+           RADIX_SUM_ROWS, RADIX_MUL_ROWS);
+  }
+  enc = radix_encrypted_rows(f, k, &l, d);
+  if (enc) printf("tfhe radix encrypted: scalar_mul 2, sum4 1, le 1 (%d PBS)\n", TFHE_PROPAGATE_PBS + TFHE_LE_PBS);
+  return ok & enc & tfhe_radix_wasm_rows(f, k, &l, d);
+}
+
+/* S5 U4a rows: the circuits of front/fhe.h on trivial inputs (mask 0, body =
+   the encoded value), after the radix rows, so their DRBG stream does not
+   change. A trivial PBS is exact (0.1 ms each). Each row checks each output
+   against its domain.lang value and the eval PBS count against the built
+   count. The tally ballots are tfhe_drbg_bytes (D, 8) mod the option count.
+   The DecE codes: 0 decRelease, 1 decRefund, 2 decHold. */
+enum {
+  FHE_TALLY_ROWS = 8,
+  FHE_THETA_ROWS = 6,
+  FHE_SETTLE_ROWS = 3,
+  FHE_CREDIT_ROWS = 6,
+  FHE_WITHDRAW_ROWS = 6,
+  FHE_AMD_ROWS = 6,
+  FHE_MIX_ROWS = 2
+};
+
+static FheEval fhe_ctx;
+static FheLuts fhe_lut_set;
+static TfheRadixLuts fhe_radix_lut_set;
+static TfheRadix fhe_rin[2];
+static uint64_t fhe_bin[FHE_INPUTS][TFHE_BLOCK_WORDS];
+static uint64_t fhe_param[FHE_INPUTS];
+static FheCircuit fhe_c;
+
+/* Block input I is the trivial block of V. */
+static void fhe_block_set(unsigned i, unsigned v) {
+  memset(fhe_bin[i], 0, sizeof fhe_bin[i]);
+  fhe_bin[i][TFHE_BIG_N] = tfhe_encode(v);
+}
+
+/* The value of output I of the last eval: a radix decrypt or a block decode. */
+static uint64_t fhe_out(unsigned i, const TfheKeys *k) {
+  FheReg r = fhe_c.out[i];
+  if (r.slot == FHE_RADIX_REG) return tfhe_radix_decrypt(&fhe_ctx.radix[r.index], k);
+  return tfhe_decode(tfhe_lwe_phase(fhe_ctx.block[r.index], k->glwe_key, TFHE_BIG_N));
+}
+
+/* Builds KIND at N and runs it on the inputs: each output must be WANT and the
+   eval PBS count must be the built count. */
+static int fhe_row(FheKind kind, unsigned n, unsigned row, const uint64_t *want, const TfheKeys *k) {
+  unsigned i;
+  int ok;
+  if (!fhe_build(&fhe_c, kind, n)) {
+    printf("FAIL fhe %s row %u: the build fails\n", fhe_c.name, row);
+    return 0;
+  }
+  fhe_eval(&fhe_ctx, &fhe_c);
+  ok = fhe_ctx.pbs == fhe_c.pbs;
+  if (!ok) printf("FAIL fhe %s row %u: eval %u PBS, built %u PBS\n", fhe_c.name, row, fhe_ctx.pbs, fhe_c.pbs);
+  for (i = 0; i < fhe_c.outs; i++) {
+    uint64_t got = fhe_out(i, k);
+    if (got != want[i]) {
+      printf("FAIL fhe %s row %u: output %u is %llu, want %llu\n", fhe_c.name, row, i, (unsigned long long)got,
+             (unsigned long long)want[i]);
+      ok = 0;
+    }
+  }
+  return ok;
+}
+
+/* tauE (tally4) and tauA (tally3) at N 1, 2, 4, 7: count j is the number of
+   ballots with choice j. */
+static int fhe_tally_rows(const TfheKeys *k, TfheDrbg *d) {
+  static const unsigned ns[] = {1, 2, 4, 7};
+  uint64_t want[4];
+  unsigned row, i, j;
+  int ok = 1;
+  for (row = 0; row < FHE_TALLY_ROWS; row++) {
+    unsigned options = row < 4u ? 4u : 3u, n = ns[row % 4u];
+    memset(want, 0, sizeof want);
+    for (i = 0; i < n; i++) {
+      unsigned choice = (unsigned)(tfhe_drbg_bytes(d, 8) % options);
+      want[choice]++;
+      for (j = 0; j < options; j++) fhe_block_set(i * options + j, j == choice);
+    }
+    ok &= fhe_row(row < 4u ? FHE_TALLY4 : FHE_TALLY3, n, row, want, k);
+  }
+  return ok;
+}
+
+/* ruleApply (ruleThreshold t) on (t, cRel, cRef): decRelease when t <= cRel,
+   else decRefund when t <= cRef, else decHold. */
+static int fhe_theta_rows(const TfheKeys *k) {
+  static const uint64_t rows[FHE_THETA_ROWS][3] = {{3, 3, 0}, {4, 3, 4}, {4, 3, 3},
+                                                   {0, 0, 0}, {5, 7, 9}, {UINT64_MAX, UINT64_MAX - 1u, UINT64_MAX}};
+  unsigned row;
+  int ok = 1;
+  for (row = 0; row < FHE_THETA_ROWS; row++) {
+    uint64_t t = rows[row][0], rel = rows[row][1], ref = rows[row][2];
+    uint64_t want = t <= rel ? 0u : t <= ref ? 1u : 2u;
+    tfhe_radix_trivial(&fhe_rin[0], rel);
+    tfhe_radix_trivial(&fhe_rin[1], ref);
+    fhe_param[0] = t;
+    ok &= fhe_row(FHE_THETA, 0, row, &want, k);
+  }
+  return ok;
+}
+
+/* The settle bits of the code d (note L550, L551): r = (d = decRelease), rf =
+   (d = decRefund), z = r + rf. */
+static int fhe_settle_rows(const TfheKeys *k) {
+  unsigned row;
+  int ok = 1;
+  for (row = 0; row < FHE_SETTLE_ROWS; row++) {
+    uint64_t want[3] = {row == 0u, row == 1u, row <= 1u};
+    fhe_block_set(0, row);
+    ok &= fhe_row(FHE_SETTLE, 0, row, want, k);
+  }
+  return ok;
+}
+
+/* ledgerAdd on (q, p, d, amount), mod 2^64: q + r amount and p + rf amount. */
+static int fhe_credit_rows(const TfheKeys *k) {
+  static const uint64_t rows[FHE_CREDIT_ROWS][4] = {{10, 20, 0, 5}, {10, 20, 1, 5}, {10, 20, 2, 5},
+                                                    {UINT64_MAX, 0, 0, 1}, {7, 9, 0, 0}, {1, 2, 1, UINT64_MAX}};
+  unsigned row;
+  int ok = 1;
+  for (row = 0; row < FHE_CREDIT_ROWS; row++) {
+    uint64_t q = rows[row][0], p = rows[row][1], amount = rows[row][3];
+    unsigned r = rows[row][2] == 0u, rf = rows[row][2] == 1u;
+    uint64_t want[2] = {q + r * amount, p + rf * amount};
+    tfhe_radix_trivial(&fhe_rin[0], q);
+    tfhe_radix_trivial(&fhe_rin[1], p);
+    fhe_block_set(0, r);
+    fhe_block_set(1, rf);
+    fhe_param[0] = amount;
+    ok &= fhe_row(FHE_CREDIT, 0, row, want, k);
+  }
+  return ok;
+}
+
+/* ledgerSub on (a, amount): ok = (amount <= a), and a - amount when ok, else a. */
+static int fhe_withdraw_rows(const TfheKeys *k) {
+  static const uint64_t rows[FHE_WITHDRAW_ROWS][2] = {{50, 50}, {50, 51}, {50, 0},
+                                                      {UINT64_MAX, UINT64_MAX}, {5, UINT64_MAX}, {0, 0}};
+  unsigned row;
+  int ok = 1;
+  for (row = 0; row < FHE_WITHDRAW_ROWS; row++) {
+    uint64_t a = rows[row][0], amount = rows[row][1];
+    uint64_t want[2] = {amount <= a, amount <= a ? a - amount : a};
+    tfhe_radix_trivial(&fhe_rin[0], a);
+    fhe_param[0] = amount;
+    ok &= fhe_row(FHE_WITHDRAW, 0, row, want, k);
+  }
+  return ok;
+}
+
+/* amdThreshold n tA on (n, tA, cAdopt, cReject), slack = natSub n tA: 0
+   amendAdopt when tA <= cAdopt, else 1 amendReject when slack < cReject, else
+   2 amendHold. */
+static int fhe_amd_rows(const TfheKeys *k) {
+  static const uint64_t rows[FHE_AMD_ROWS][4] = {{7, 5, 5, 0}, {7, 5, 4, 3}, {7, 5, 4, 2},
+                                                 {5, 5, 4, 0}, {5, 5, 4, 1}, {3, 5, 2, 1}};
+  unsigned row;
+  int ok = 1;
+  for (row = 0; row < FHE_AMD_ROWS; row++) {
+    uint64_t n = rows[row][0], ta = rows[row][1], adopt = rows[row][2], reject = rows[row][3];
+    uint64_t slack = n > ta ? n - ta : 0u;
+    uint64_t want = ta <= adopt ? 0u : slack < reject ? 1u : 2u;
+    tfhe_radix_trivial(&fhe_rin[0], adopt);
+    tfhe_radix_trivial(&fhe_rin[1], reject);
+    fhe_param[0] = ta;
+    fhe_param[1] = slack;
+    ok &= fhe_row(FHE_AMD, 0, row, &want, k);
+  }
+  return ok;
+}
+
+/* The refresh row on (x, y, a): x a + y 2 mod 2^64, with one refresh (32 PBS)
+   before the radd. */
+static int fhe_mix_rows(const TfheKeys *k) {
+  static const uint64_t rows[FHE_MIX_ROWS][3] = {{1, 1, UINT64_MAX}, {1, 0, 12345}};
+  unsigned row;
+  int ok = 1;
+  for (row = 0; row < FHE_MIX_ROWS; row++) {
+    uint64_t want = rows[row][0] * rows[row][2] + rows[row][1] * 2u;
+    fhe_block_set(0, (unsigned)rows[row][0]);
+    fhe_block_set(1, (unsigned)rows[row][1]);
+    fhe_param[0] = rows[row][2];
+    ok &= fhe_row(FHE_MIX, 0, row, &want, k);
+    if (fhe_c.refreshes != 1u || fhe_c.pbs != TFHE_RADIX_BLOCKS + TFHE_PROPAGATE_PBS) {
+      printf("FAIL fhe mix row %u: %u refreshes and %u PBS, want 1 and %d\n", row, fhe_c.refreshes, fhe_c.pbs,
+             TFHE_RADIX_BLOCKS + TFHE_PROPAGATE_PBS);
+      ok = 0;
+    }
+  }
+  return ok;
+}
+
+/* S5 U4b rows: the circuit entries of the tfhe module at N 7 (one node call
+   on one instance). Rows 1 to 7 have trivial inputs: the Wasm out words must
+   be the C eval words, and the decrypt must be the table value. Row 8 is theta
+   on encrypted radixes (the DRBG D after all the other rows): only its decrypt
+   is checked (a C eval of its PBS costs about 49 s). */
+enum { FHE_WASM_ROWS = 8 };
+
+typedef struct FheWasmRow {
+  FheKind kind;
+  uint64_t radix[2], block[2], param[2], want[FHE_OUTPUTS];
+} FheWasmRow;
+
+/* tally4: ballot i votes option (3i + 1) % 4; tally3: ballot i votes option
+   i % 3 (i = 0 .. 6). The radixes, blocks and params are in the circuit input
+   order. */
+static const FheWasmRow fhe_wasm_table[FHE_WASM_ROWS] = {
+  {FHE_TALLY4, {0, 0}, {0, 0}, {0, 0}, {2, 2, 1, 2}},
+  {FHE_TALLY3, {0, 0}, {0, 0}, {0, 0}, {3, 2, 2, 0}},
+  {FHE_THETA, {4, 5}, {0, 0}, {5, 0}, {1, 0, 0, 0}},
+  {FHE_SETTLE, {0, 0}, {1, 0}, {0, 0}, {0, 1, 1, 0}},
+  {FHE_CREDIT, {100, 200}, {1, 0}, {50, 0}, {150, 200, 0, 0}},
+  {FHE_WITHDRAW, {100, 0}, {0, 0}, {30, 0}, {1, 70, 0, 0}},
+  {FHE_AMD, {2, 5}, {0, 0}, {3, 4}, {1, 0, 0, 0}},
+  {FHE_THETA, {3, 9}, {0, 0}, {10, 0}, {2, 0, 0, 0}}};
+
+static TfheRadix fhe_wasm_got;
+
+/* Sets the inputs of row ROW. The last row encrypts its radixes with D. */
+static void fhe_wasm_set(unsigned row, const TfheKeys *k, TfheDrbg *d) {
+  const FheWasmRow *w = &fhe_wasm_table[row];
+  const unsigned options = row == 0 ? 4u : 3u;
+  unsigned i, j;
+  for (i = 0; i < 2u; i++) {
+    if (row + 1u == FHE_WASM_ROWS)
+      tfhe_radix_encrypt(&fhe_rin[i], k, w->radix[i], d);
+    else
+      tfhe_radix_trivial(&fhe_rin[i], w->radix[i]);
+    fhe_block_set(i, (unsigned)w->block[i]);
+    fhe_param[i] = w->param[i];
+  }
+  for (i = 0; i < 7u && row < 2u; i++) {
+    const unsigned choice = row == 0 ? (3u * i + 1u) % 4u : i % 3u;
+    for (j = 0; j < options; j++) fhe_block_set(i * options + j, j == choice);
+  }
+}
+
+/* Writes the input line of fhe_c: the name, the radix inputs, the block
+   inputs, then the parameters. */
+static void fhe_wasm_line(FILE *in) {
+  unsigned i;
+  fputs(fhe_c.name, in);
+  for (i = 0; i < fhe_c.radix_ins && i < 2u; i++) put_words(in, (const uint64_t *)fhe_rin[i].block, RADIX_WORDS);
+  for (i = 0; i < fhe_c.block_ins; i++) put_words(in, fhe_bin[i], TFHE_BLOCK_WORDS);
+  put_words(in, fhe_param, fhe_c.params);
+  fputs("\n", in);
+}
+
+/* Reads the out words of row ROW from OUT and checks them. 0 when a word is
+   missing; *PASS := 0 when the row fails. */
+static int fhe_wasm_row(FILE *out, unsigned row, const TfheKeys *k, int *pass) {
+  const FheWasmRow *w = &fhe_wasm_table[row];
+  const int enc = row + 1u == FHE_WASM_ROWS;
+  char name[32];
+  unsigned i;
+  int ok = fhe_build(&fhe_c, w->kind, 7);
+  if (ok && !enc) {
+    fhe_wasm_set(row, k, NULL);
+    fhe_eval(&fhe_ctx, &fhe_c);
+  }
+  snprintf(name, sizeof name, "fhe %s", fhe_c.name);
+  for (i = 0; i < fhe_c.outs && ok; i++) {
+    const FheReg r = fhe_c.out[i];
+    const int radix = r.slot == FHE_RADIX_REG;
+    const size_t n = radix ? RADIX_WORDS : TFHE_BLOCK_WORDS;
+    const uint64_t *want = radix ? (const uint64_t *)fhe_ctx.radix[r.index].block : fhe_ctx.block[r.index];
+    uint64_t got;
+    int same;
+    ok = read_words(out, (uint64_t *)fhe_wasm_got.block, n);
+    if (!ok) printf("FAIL fhe wasm %s row %u: fewer than %u words\n", fhe_c.name, row + 1u, (unsigned)n);
+    same = ok && (enc || words_equal(name, (const uint64_t *)fhe_wasm_got.block, want, n));
+    got = radix ? tfhe_radix_decrypt(&fhe_wasm_got, k)
+                : tfhe_decode(tfhe_lwe_phase(fhe_wasm_got.block[0], k->glwe_key, TFHE_BIG_N));
+    if (ok && got != w->want[i])
+      printf("FAIL fhe wasm %s row %u: %llu, want %llu\n", fhe_c.name, row + 1u, (unsigned long long)got,
+             (unsigned long long)w->want[i]);
+    *pass &= same && got == w->want[i];
+  }
+  return ok;
+}
+
+static int fhe_wasm_rows(const TfheKeys *k, TfheDrbg *d) {
+  char cmd[512];
+  FILE *in = fopen("build/tfhe-fhe-in.txt", "w");
+  FILE *out = NULL;
+  unsigned row;
+  int ok = in != NULL, pass = 1;
+  for (row = 0; row < FHE_WASM_ROWS && ok; row++) {
+    fhe_wasm_set(row, k, d);
+    ok = fhe_build(&fhe_c, fhe_wasm_table[row].kind, 7);
+    if (ok) fhe_wasm_line(in);
+  }
+  ok = in != NULL && fclose(in) == 0 && ok && tfhe_wasm_write("build/tfhe-kernel.wasm") &&
+       key_write("build/tfhe-ksk.bin", k->ksk, TFHE_KSK_WORDS) &&
+       key_write("build/tfhe-bsk.bin", k->bsk_fourier, TFHE_BSK_FOURIER_DOUBLES) &&
+       system(tfhe_node_cmd(cmd, sizeof cmd, 0, "build/tfhe-fhe-in.txt", "build/tfhe-fhe-out.txt")) == 0;
+  remove("build/tfhe-ksk.bin");
+  remove("build/tfhe-bsk.bin");
+  remove("build/tfhe-fhe-in.txt");
+  if (ok) out = fopen("build/tfhe-fhe-out.txt", "r");
+  if (!ok || out == NULL) puts("FAIL fhe wasm: the module, a key file, the input or node failed");
+  ok = ok && out != NULL;
+  for (row = 0; row < FHE_WASM_ROWS && ok; row++) ok = fhe_wasm_row(out, row, k, &pass);
+  if (out != NULL) fclose(out);
+  remove("build/tfhe-fhe-out.txt");
+  if (ok && pass)
+    puts("fhe wasm: C = Wasm (tally4, tally3, theta, settle, credit, withdraw, amd trivial 7; theta encrypted 1; 8 "
+         "rows)");
+  return ok && pass;
+}
+
+/* The built PBS total of each printed circuit at N 7. */
+static int fhe_circuit_totals(void) {
+  char line[160];
+  size_t at = (size_t)snprintf(line, sizeof line, "fhe circuits (N 7):");
+  unsigned kind;
+  for (kind = 0; kind < FHE_PRINTED; kind++) {
+    if (!fhe_build(&fhe_c, (FheKind)kind, 7)) {
+      printf("FAIL fhe %s: the build at N 7 fails\n", fhe_c.name);
+      return 0;
+    }
+    at += (size_t)snprintf(line + at, sizeof line - at, "%s %s %u", kind == 0 ? "" : ",", fhe_c.name, fhe_c.pbs);
+  }
+  printf("%s PBS\n", line);
+  return 1;
+}
+
+static int tfhe_fhe_rows(const TfheFft *f, const TfheKeys *k, TfheDrbg *d) {
+  int ok;
+  tfhe_radix_luts(&fhe_radix_lut_set);
+  fhe_luts(&fhe_lut_set);
+  fhe_ctx.f = f;
+  fhe_ctx.k = k;
+  fhe_ctx.rl = &fhe_radix_lut_set;
+  fhe_ctx.l = &fhe_lut_set;
+  fhe_ctx.rin = fhe_rin;
+  fhe_ctx.bin = (const uint64_t(*)[TFHE_BLOCK_WORDS])fhe_bin;
+  fhe_ctx.param = fhe_param;
+  ok = fhe_circuit_totals();
+  ok &= fhe_tally_rows(k, d);
+  ok &= fhe_theta_rows(k);
+  ok &= fhe_settle_rows(k);
+  ok &= fhe_credit_rows(k);
+  ok &= fhe_withdraw_rows(k);
+  ok &= fhe_amd_rows(k);
+  ok &= fhe_mix_rows(k);
+  ok &= fhe_wasm_rows(k, d);
+  if (ok) {
+    printf("fhe trivial: %d rows\n", FHE_TALLY_ROWS + FHE_THETA_ROWS + FHE_SETTLE_ROWS + FHE_CREDIT_ROWS +
+                                         FHE_WITHDRAW_ROWS + FHE_AMD_ROWS + FHE_MIX_ROWS);
+  }
+  return ok;
+}
+
+/* S5 U5b rows: the public-key encryption of one chunk (W/S5-NOTES.md "### U5
+   plan" item 6). The PKE keys and the chunk come from two new fixed seeds, so
+   the DRBG streams of the other rows do not move. P1: each coefficient of
+   pk_b - pk_a phi_1(key) is in [-2^17, 2^17]. P2: entry j of the chunk
+   (m_j = j) decodes to j under KEY, with an error below 2^40. P3: the cast of
+   entry j decodes to j under the big key. */
+static int tfhe_client_write(const char *path) {
+  FILE *module = fopen(path, "wb");
+  int ok = module != NULL && wasm_write_tfhe_client(module, stderr);
+  return module != NULL && fclose(module) == 0 && ok;
+}
+
+/* S5 U5c (W2): the node module with the casting KSK at WASM_TFHE_KSK (in
+   place of the compute KSK) and the BSK after it: expand j = 0, 1, 15 and
+   the cast (the pbs entry, the identity LUT) of j = 0, 15 give the C words,
+   and each cast decrypts to j under the big key. Each row is checked. */
+static int tfhe_pke_node_rows(const TfheFft *f, const TfheKeys *k, const TfhePke *p, const uint64_t *mask,
+                              const uint64_t *body) {
+  static const unsigned js[3] = {0, 1, 15};
+  static uint64_t want[5][TFHE_BIG_N + 1];
+  uint64_t got[TFHE_BIG_N + 1], lut[TFHE_POLY_N], jw;
+  uint8_t table[TFHE_PLAIN];
+  char cmd[512], row[32];
+  FILE *in = fopen("build/tfhe-pke-in.txt", "w"), *out = NULL;
+  unsigned i;
+  int pass = 1, ran = tfhe_wasm_write("build/tfhe-kernel.wasm") &&
+                      key_write("build/tfhe-cksk.bin", p->cksk, TFHE_KSK_WORDS) &&
+                      key_write("build/tfhe-bsk.bin", k->bsk_fourier, TFHE_BSK_FOURIER_DOUBLES) && in != NULL;
+  for (i = 0; i < TFHE_PLAIN; i++) table[i] = (uint8_t)i;
+  tfhe_lut(lut, table);
+  for (i = 0; i < 3; i++) tfhe_pke_expand(want[i], mask, body[js[i]], js[i]);
+  tfhe_pke_cast(f, want[3], want[0], p, k);
+  tfhe_pke_cast(f, want[4], want[2], p, k);
+  for (i = 0; i < 3 && in != NULL; i++) {
+    jw = js[i];
+    fputs("expand", in);
+    put_words(in, mask, TFHE_POLY_N);
+    put_words(in, body + js[i], 1);
+    put_words(in, &jw, 1);
+    fputs("\n", in);
+  }
+  for (i = 0; i < 2 && in != NULL; i++) {
+    fputs("pbs", in);
+    put_words(in, want[2 * i], TFHE_BIG_N + 1);
+    put_words(in, lut, TFHE_POLY_N);
+    fputs("\n", in);
+  }
+  snprintf(cmd, sizeof cmd,
+           "node test/run-wasm.mjs --load %lu build/tfhe-cksk.bin --load %lu build/tfhe-bsk.bin "
+           "--words build/tfhe-kernel.wasm - <build/tfhe-pke-in.txt >build/tfhe-pke-out.txt 2>&1",
+           (unsigned long)WASM_TFHE_KSK, (unsigned long)WASM_TFHE_KSK + 8ul * (unsigned long)TFHE_KSK_WORDS);
+  ran = in != NULL && fclose(in) == 0 && ran && system(cmd) == 0;
+  remove("build/tfhe-cksk.bin");
+  remove("build/tfhe-bsk.bin");
+  if (ran) out = fopen("build/tfhe-pke-out.txt", "r");
+  ran = ran && out != NULL;
+  for (i = 0; i < 5 && ran; i++) {
+    ran = read_words(out, got, TFHE_BIG_N + 1);
+    snprintf(row, sizeof row, "%s j %u", i < 3 ? "expand" : "cast", i < 3 ? js[i] : js[2 * (i - 3)]);
+    pass = ran && words_equal(row, got, want[i], TFHE_BIG_N + 1) && pass;
+    if (ran && i >= 3 && tfhe_decode(tfhe_lwe_phase(got, k->glwe_key, TFHE_BIG_N)) != js[2 * (i - 3)]) {
+      printf("FAIL tfhe wasm cast j %u: the Wasm cast does not decrypt to j\n", js[2 * (i - 3)]);
+      pass = 0;
+    }
+  }
+  if (!ran) puts("FAIL tfhe wasm expand: the module, a key file, the input or node failed (build/tfhe-pke-out.txt)");
+  if (out != NULL) fclose(out);
+  if (ran && pass) {
+    remove("build/tfhe-pke-in.txt");
+    remove("build/tfhe-pke-out.txt");
+  }
+  return ran && pass;
+}
+
+/* S5 U5c (W1): the client module pkenc with the seed of the C chunk and the
+   16 messages gives the C mask and body words. */
+static int tfhe_pke_wasm_rows(const TfheFft *f, const TfheKeys *k, const TfhePke *p, const uint8_t *seed,
+                              const uint64_t *mask, const uint64_t *body) {
+  static uint64_t got[TFHE_POLY_N + TFHE_PLAIN];
+  uint64_t words[TFHE_SEED_BYTES / 8u] = {0}, m[TFHE_PLAIN];
+  unsigned j;
+  FILE *in = fopen("build/tfhe-client-in.txt", "w"), *out = NULL;
+  int ok = tfhe_client_write("build/tfhe-client.wasm") && in != NULL;
+  for (j = 0; j < TFHE_SEED_BYTES; j++) words[j / 8u] |= (uint64_t)seed[j] << (8u * (j % 8u));
+  for (j = 0; j < TFHE_PLAIN; j++) m[j] = j;
+  if (in != NULL) {
+    fputs("pkenc", in);
+    put_words(in, words, TFHE_SEED_BYTES / 8u);
+    put_words(in, p->pk_a, TFHE_POLY_N);
+    put_words(in, p->pk_b, TFHE_POLY_N);
+    put_words(in, m, TFHE_PLAIN);
+    fputs("\n", in);
+  }
+  ok = in != NULL && fclose(in) == 0 && ok &&
+       system("node test/run-wasm.mjs --words build/tfhe-client.wasm - <build/tfhe-client-in.txt "
+              ">build/tfhe-client-out.txt 2>&1") == 0;
+  if (ok) out = fopen("build/tfhe-client-out.txt", "r");
+  ok = ok && out != NULL && read_words(out, got, TFHE_POLY_N + TFHE_PLAIN);
+  if (!ok) puts("FAIL tfhe wasm pkenc: the module, the input or node failed (build/tfhe-client-out.txt)");
+  ok = ok && words_equal("pkenc mask", got, mask, TFHE_POLY_N) &&
+       words_equal("pkenc body", got + TFHE_POLY_N, body, TFHE_PLAIN);
+  if (out != NULL) fclose(out);
+  if (ok) {
+    remove("build/tfhe-client-in.txt");
+    remove("build/tfhe-client-out.txt");
+  }
+  ok = tfhe_pke_node_rows(f, k, p, mask, body) && ok;
+  if (ok)
+    printf("tfhe wasm pke: C = Wasm words (pkenc mask %d body %d, expand 3 x %d, cast 2 x %d), decrypt = m\n",
+           TFHE_POLY_N, TFHE_PLAIN, TFHE_BIG_N + 1, TFHE_BIG_N + 1);
+  return ok;
+}
+
+/* S5 U6b rows: the encrypted chain at N 7, part 1 (W/S5-NOTES.md "### U6
+   plan"). The client module encrypts 18 lists of 16 messages under the PKE
+   key, each with the chain seed (word 0 xor the line number): the DecE and the
+   BallotA ballots (lines 0 to 13, one bit block for each option) and the
+   radixes q and p (lines 14 to 17, 16 digits a line). C expands the 113 used
+   slots, and the node module with the casting KSK casts each (the pbs entry,
+   the identity LUT): each cast must decrypt to its message under the big key.
+   Run A is tally4 and tally3 on the cast ballot blocks (the compute KSK). */
+enum { CHAIN_LINES = 18, CHAIN_CASTS = 113, CHAIN_DEC = 0, CHAIN_BALLOT = 28, CHAIN_Q = 49, CHAIN_P = 81 };
+
+/* The choice of each ballot: DecE (4 options), BallotA (3 options). */
+static const unsigned chain_dec[7] = {0, 0, 0, 1, 1, 2, 3};
+static const unsigned chain_ballot[7] = {0, 0, 0, 0, 1, 1, 2};
+/* The radixes q and p of the credit stage (U6c). */
+static const uint64_t chain_radix[2] = {0x00000000FFFFFFFFu, 0x123456789ABCDEF0u};
+static uint64_t chain_m[CHAIN_LINES][TFHE_PLAIN];
+static uint64_t chain_ct[CHAIN_LINES][TFHE_POLY_N + TFHE_PLAIN];
+static uint64_t chain_slot[CHAIN_CASTS];
+static uint64_t chain_cast[CHAIN_CASTS][TFHE_BLOCK_WORDS];
+static TfheRadix chain_count[7];
+
+/* The used slots of client line LINE: 4 (DecE), 3 (BallotA) or 16 (q, p). */
+static unsigned chain_width(unsigned line) {
+  return line < 7u ? 4u : line < 14u ? 3u : (unsigned)TFHE_PLAIN;
+}
+
+/* The 16 messages of client line LINE: a ballot has 1 at its choice and 0 at
+   the other slots; lines 14 to 17 are the 2-bit digits of q and p, low digit
+   first. */
+static void chain_list(uint64_t m[TFHE_PLAIN], unsigned line) {
+  const unsigned w = chain_width(line), half = line < 14u ? 0u : line - 14u;
+  const unsigned choice = line < 7u ? chain_dec[line] : line < 14u ? chain_ballot[line - 7u] : 0u;
+  unsigned j;
+  for (j = 0; j < TFHE_PLAIN; j++)
+    m[j] = line < 14u ? (uint64_t)(j < w && j == choice)
+                      : (chain_radix[half / 2u] >> (2u * (16u * (half % 2u) + j))) & 3u;
+}
+
+/* The decode of block B under the big key. */
+static uint64_t chain_value(const uint64_t *b, const TfheKeys *k) {
+  return tfhe_decode(tfhe_lwe_phase(b, k->glwe_key, TFHE_BIG_N));
+}
+
+/* The (1.1) row of tally STAGE (0 tally4, 1 tally3) with the counts COUNT:
+   each ballot block decrypts to its planned bit, and count j decrypts to the
+   sum of the decrypted bits j (f of the decrypted inputs) and to the plan. */
+static int chain_tally_row(unsigned stage, const TfheRadix *count, const TfheKeys *k) {
+  const unsigned options = stage == 0 ? 4u : 3u, base = stage == 0 ? CHAIN_DEC : CHAIN_BALLOT;
+  const char *name = stage == 0 ? "tally4" : "tally3";
+  uint64_t sum[4] = {0}, plan[4] = {0}, bit, got;
+  unsigned i, j, wrong = 0;
+  int ok = 1;
+  for (i = 0; i < 7u; i++) {
+    const unsigned choice = stage == 0 ? chain_dec[i] : chain_ballot[i];
+    plan[choice]++;
+    for (j = 0; j < options; j++) {
+      bit = chain_value(chain_cast[base + i * options + j], k);
+      sum[j] += bit;
+      if (wrong == 0 && bit != (uint64_t)(j == choice))
+        printf("FAIL fhe chain %s: x%u_%u = %llu, want %u\n", name, i, j, (unsigned long long)bit,
+               (unsigned)(j == choice));
+      wrong += bit != (uint64_t)(j == choice);
+    }
+  }
+  for (j = 0; j < options; j++) {
+    got = tfhe_radix_decrypt(&count[j], k);
+    if (got != sum[j])
+      printf("FAIL fhe chain %s (1.1): count %u = %llu, want %llu\n", name, j, (unsigned long long)got,
+             (unsigned long long)sum[j]);
+    if (got == sum[j] && got != plan[j])
+      printf("FAIL fhe chain %s: count %u = %llu, want %llu\n", name, j, (unsigned long long)got,
+             (unsigned long long)plan[j]);
+    ok &= got == sum[j] && got == plan[j];
+  }
+  return ok && wrong == 0;
+}
+
+/* S5 U6c rows: runs B to E of the chain and step 5 (W/S5-NOTES.md "### U6 plan").
+   Run B: theta on (cRel, cRef) = the DecE counts 0 and 1, amd on (cAdopt,
+   cReject) = the BallotA counts 0 and 1. Run C: settle on the theta d. Run D:
+   credit on the cast radixes q and p (32 casts each, low digit first) and the
+   settle r and rf. Run E: withdraw on the credit q2. Each run is one node call
+   (the compute KSK). A stage keeps its decrypted inputs (the stream order:
+   radixes, blocks, params) at the line write; its (1.1) row checks each input
+   against the plan, and each output against f of the decrypted inputs and
+   against the plan. Step 5: the C settle eval (2 PBS in C) on the theta d
+   block; its words must be the run C words. */
+typedef struct ChainStage {
+  FheKind kind;
+  unsigned ni, no;
+  const char *name[7];
+  uint64_t plan[7];
+} ChainStage;
+
+/* The inputs, then the outputs. theta t 3; amd tA 4 and slack = natSub 7 4 =
+   3; credit amount 1; withdraw amount 2^32 - 1. */
+static const ChainStage chain_stage[5] = {
+  {FHE_THETA, 3, 1, {"cRel", "cRef", "t", "d"}, {3, 2, 3, 0}},
+  {FHE_AMD, 4, 1, {"cAdopt", "cReject", "tA", "slack", "code"}, {4, 2, 4, 3, 0}},
+  {FHE_SETTLE, 1, 3, {"d", "r", "rf", "z"}, {0, 1, 0, 1}},
+  {FHE_CREDIT, 5, 2, {"q", "p", "r", "rf", "amount", "q2", "p2"},
+   {0x00000000FFFFFFFFu, 0x123456789ABCDEF0u, 1, 0, 1, 0x0000000100000000u, 0x123456789ABCDEF0u}},
+  {FHE_WITHDRAW, 2, 2, {"a", "amount", "ok", "a2"}, {0x0000000100000000u, 0x00000000FFFFFFFFu, 1, 1}}};
+static TfheRadix chain_out[5][3];
+static uint64_t chain_v[5][7];
+static char chain_file[2][40];
+
+/* One FAIL line of a stage: decimal when both values are below 2^16, else 16 hex digits. */
+static void chain_fail(const char *stage, const char *tag, const char *name, uint64_t got, uint64_t want) {
+  if ((got | want) >> 16 == 0)
+    printf("FAIL fhe chain %s%s: %s = %llu, want %llu\n", stage, tag, name, (unsigned long long)got,
+           (unsigned long long)want);
+  else
+    printf("FAIL fhe chain %s%s: %s = 0x%016llx, want 0x%016llx\n", stage, tag, name, (unsigned long long)got,
+           (unsigned long long)want);
+}
+
+/* Output I of stage KIND on the decrypted inputs V (the stream order): the
+   clear meaning of the trivial rows (theta, amd, settle, credit, withdraw). */
+static uint64_t chain_f(FheKind kind, const uint64_t *v, unsigned i) {
+  const uint64_t settle[3] = {v[0] == 0u, v[0] == 1u, v[0] <= 1u};
+  return kind == FHE_THETA    ? (v[2] <= v[0] ? 0u : v[2] <= v[1] ? 1u : 2u)
+         : kind == FHE_AMD    ? (v[2] <= v[0] ? 0u : v[3] < v[1] ? 1u : 2u)
+         : kind == FHE_SETTLE ? settle[i % 3u]
+         : kind == FHE_CREDIT ? v[i % 2u] + v[2u + i % 2u] * v[4]
+         : i == 0             ? (uint64_t)(v[1] <= v[0])
+                              : v[1] <= v[0] ? v[0] - v[1] : v[0];
+}
+
+/* Radix inputs 0 and 1 are A and B. */
+static void chain_rin(const TfheRadix *a, const TfheRadix *b) {
+  fhe_rin[0] = *a;
+  fhe_rin[1] = *b;
+}
+
+/* The in and out files of run X (b to e); the in file opens when OK. */
+static FILE *chain_open(char x, int ok) {
+  snprintf(chain_file[0], sizeof chain_file[0], "build/tfhe-chain-%c-in.txt", x);
+  snprintf(chain_file[1], sizeof chain_file[1], "build/tfhe-chain-%c-out.txt", x);
+  return ok ? fopen(chain_file[0], "w") : NULL;
+}
+
+/* Writes the line of stage S to IN (its radix and block inputs are in fhe_rin
+   and fhe_bin; its params come from the plan) and keeps the decrypted inputs
+   in chain_v[S]. */
+static int chain_line(FILE *in, unsigned s, const TfheKeys *k, unsigned *pbs) {
+  const ChainStage *st = &chain_stage[s];
+  unsigned i, n = 0;
+  int ok = in != NULL && fhe_build(&fhe_c, st->kind, 7) &&
+           fhe_c.radix_ins + fhe_c.block_ins + fhe_c.params == st->ni && fhe_c.radix_ins <= 2u;
+  for (i = 0; i < fhe_c.params && ok; i++) fhe_param[i] = st->plan[st->ni - fhe_c.params + i];
+  for (i = 0; i < fhe_c.radix_ins && ok; i++) chain_v[s][n++] = tfhe_radix_decrypt(&fhe_rin[i], k);
+  for (i = 0; i < fhe_c.block_ins && ok; i++) chain_v[s][n++] = chain_value(fhe_bin[i], k);
+  for (i = 0; i < fhe_c.params && ok; i++) chain_v[s][n++] = fhe_param[i];
+  if (ok) fhe_wasm_line(in);
+  *pbs += ok ? fhe_c.pbs : 0u;
+  return ok;
+}
+
+/* Closes IN (the lines of stages S0 to S1 - 1), runs the node module on it
+   (the compute KSK) and reads the outputs of each stage into chain_out (a
+   radix, or block 0 of it). */
+static int chain_run(FILE *in, int ok, unsigned s0, unsigned s1) {
+  char cmd[512];
+  FILE *out = NULL;
+  unsigned s, i;
+  ok = in != NULL && fclose(in) == 0 && ok &&
+       system(tfhe_node_cmd(cmd, sizeof cmd, 0, chain_file[0], chain_file[1])) == 0;
+  if (ok) out = fopen(chain_file[1], "r");
+  ok = ok && out != NULL;
+  for (s = s0; s < s1 && ok; s++) {
+    ok = fhe_build(&fhe_c, chain_stage[s].kind, 7) && fhe_c.outs == chain_stage[s].no;
+    for (i = 0; i < fhe_c.outs && ok; i++)
+      ok = read_words(out, (uint64_t *)chain_out[s][i].block,
+                      fhe_c.out[i].slot == FHE_RADIX_REG ? RADIX_WORDS : TFHE_BLOCK_WORDS);
+  }
+  if (out != NULL) fclose(out);
+  return ok;
+}
+
+/* The (1.1) row of stage S: each input decrypts to its plan; each output
+   decrypts to f of the decrypted inputs (chain_f) and to its plan. */
+static int chain_stage_row(unsigned s, const TfheKeys *k) {
+  const ChainStage *st = &chain_stage[s];
+  uint64_t *v = chain_v[s], got, f, want;
+  unsigned i;
+  int ok = fhe_build(&fhe_c, st->kind, 7);
+  for (i = 0; i < st->ni; i++) {
+    if (v[i] != st->plan[i]) chain_fail(fhe_c.name, "", st->name[i], v[i], st->plan[i]);
+    ok &= v[i] == st->plan[i];
+  }
+  for (i = 0; i < st->no; i++)
+    v[st->ni + i] = fhe_c.out[i].slot == FHE_RADIX_REG ? tfhe_radix_decrypt(&chain_out[s][i], k)
+                                                        : chain_value(chain_out[s][i].block[0], k);
+  for (i = 0; i < st->no; i++) {
+    got = v[st->ni + i];
+    f = chain_f(st->kind, v, i);
+    want = st->plan[st->ni + i];
+    if (got != f) chain_fail(fhe_c.name, " (1.1)", st->name[st->ni + i], got, f);
+    if (got == f && got != want) chain_fail(fhe_c.name, "", st->name[st->ni + i], got, want);
+    ok &= got == f && got == want;
+  }
+  return ok;
+}
+
+/* Runs B to E and step 5. 0 on an I/O fault; *PASS := 0 when a row fails. */
+static int chain_stage_rows(const TfheKeys *k, unsigned *pbs, int *pass) {
+  const uint64_t *c_word, *w_word;
+  FILE *in = chain_open('b', 1);
+  unsigned s, c, i;
+  int ok;
+  chain_rin(chain_count, chain_count + 1);
+  ok = chain_line(in, 0, k, pbs);
+  chain_rin(chain_count + 4, chain_count + 5);
+  ok = ok && chain_line(in, 1, k, pbs);
+  ok = chain_run(in, ok, 0, 2);
+  in = chain_open('c', ok);
+  memcpy(fhe_bin[0], chain_out[0][0].block[0], sizeof fhe_bin[0]);
+  ok = ok && chain_line(in, 2, k, pbs);
+  ok = chain_run(in, ok, 2, 3);
+  in = chain_open('d', ok);
+  for (c = 0; c < TFHE_RADIX_BLOCKS; c++) {
+    memcpy(fhe_rin[0].block[c], chain_cast[CHAIN_Q + c], sizeof fhe_rin[0].block[c]);
+    memcpy(fhe_rin[1].block[c], chain_cast[CHAIN_P + c], sizeof fhe_rin[1].block[c]);
+  }
+  memcpy(fhe_bin[0], chain_out[2][0].block[0], sizeof fhe_bin[0]);
+  memcpy(fhe_bin[1], chain_out[2][1].block[0], sizeof fhe_bin[1]);
+  ok = ok && chain_line(in, 3, k, pbs);
+  ok = chain_run(in, ok, 3, 4);
+  in = chain_open('e', ok);
+  fhe_rin[0] = chain_out[3][0];
+  ok = ok && chain_line(in, 4, k, pbs);
+  ok = chain_run(in, ok, 4, 5);
+  for (s = 0; s < 5u && ok; s++) *pass &= chain_stage_row(s, k);
+  /* Step 5: the C settle eval on the theta d block of run B. */
+  if (ok) {
+    fhe_ctx.bin = (const uint64_t(*)[TFHE_BLOCK_WORDS])chain_out[0][0].block;
+    ok = fhe_build(&fhe_c, FHE_SETTLE, 7);
+    if (ok) fhe_eval(&fhe_ctx, &fhe_c);
+    fhe_ctx.bin = (const uint64_t(*)[TFHE_BLOCK_WORDS])fhe_bin;
+  }
+  for (c = 0; c < fhe_c.outs && ok; c++) {
+    c_word = fhe_ctx.block[fhe_c.out[c].index];
+    w_word = chain_out[2][c].block[0];
+    i = 0;
+    while (i < TFHE_BLOCK_WORDS && c_word[i] == w_word[i]) i++;
+    if (i < TFHE_BLOCK_WORDS)
+      printf("FAIL fhe chain settle: C = Wasm word %u of %s: C %llu, Wasm %llu\n", i, chain_stage[2].name[1u + c],
+             (unsigned long long)c_word[i], (unsigned long long)w_word[i]);
+    *pass &= i == TFHE_BLOCK_WORDS;
+  }
+  return ok;
+}
+
+static int fhe_chain_rows(const TfheKeys *k, const TfhePke *p) {
+  static const char chain_seed[] = "charter-lang S5 U6 fhe chain 000";
+  uint64_t words[TFHE_SEED_BYTES / 8u] = {0}, seed[TFHE_SEED_BYTES / 8u], ct[TFHE_BIG_N + 1], lut[TFHE_POLY_N], got;
+  uint8_t table[TFHE_PLAIN];
+  char cmd[512];
+  FILE *in = fopen("build/tfhe-chain-client-in.txt", "w"), *out = NULL;
+  unsigned line, j, c = 0, bad = 0, first = 0, pbs = CHAIN_CASTS;
+  int ok = tfhe_client_write("build/tfhe-client.wasm") && in != NULL, pass = 1;
+  for (j = 0; j < TFHE_SEED_BYTES; j++) words[j / 8u] |= (uint64_t)(uint8_t)chain_seed[j] << (8u * (j % 8u));
+  for (j = 0; j < TFHE_PLAIN; j++) table[j] = (uint8_t)j;
+  tfhe_lut(lut, table);
+  for (line = 0; line < CHAIN_LINES; line++) chain_list(chain_m[line], line);
+  for (line = 0; line < CHAIN_LINES && in != NULL; line++) {
+    memcpy(seed, words, sizeof seed);
+    seed[0] ^= line;
+    fputs("pkenc", in);
+    put_words(in, seed, TFHE_SEED_BYTES / 8u);
+    put_words(in, p->pk_a, TFHE_POLY_N);
+    put_words(in, p->pk_b, TFHE_POLY_N);
+    put_words(in, chain_m[line], TFHE_PLAIN);
+    fputs("\n", in);
+  }
+  ok = in != NULL && fclose(in) == 0 && ok &&
+       system("node test/run-wasm.mjs --words build/tfhe-client.wasm - <build/tfhe-chain-client-in.txt "
+              ">build/tfhe-chain-client-out.txt 2>&1") == 0;
+  if (ok) out = fopen("build/tfhe-chain-client-out.txt", "r");
+  ok = ok && out != NULL;
+  for (line = 0; line < CHAIN_LINES && ok; line++) ok = read_words(out, chain_ct[line], TFHE_POLY_N + TFHE_PLAIN);
+  if (out != NULL) fclose(out);
+  /* The C expand of each used slot is the input of one cast. */
+  in = ok ? fopen("build/tfhe-chain-cast-in.txt", "w") : NULL;
+  for (line = 0; line < CHAIN_LINES && in != NULL; line++) {
+    for (j = 0; j < chain_width(line); j++) {
+      tfhe_pke_expand(ct, chain_ct[line], chain_ct[line][TFHE_POLY_N + j], j);
+      chain_slot[c++] = chain_m[line][j];
+      fputs("pbs", in);
+      put_words(in, ct, TFHE_BIG_N + 1);
+      put_words(in, lut, TFHE_POLY_N);
+      fputs("\n", in);
+    }
+  }
+  snprintf(cmd, sizeof cmd,
+           "node test/run-wasm.mjs --load %lu %s --load %lu build/tfhe-bsk.bin --words build/tfhe-kernel.wasm - "
+           "<build/tfhe-chain-cast-in.txt >build/tfhe-chain-cast-out.txt 2>&1",
+           (unsigned long)WASM_TFHE_KSK, "build/tfhe-cksk.bin",
+           (unsigned long)WASM_TFHE_KSK + 8ul * (unsigned long)TFHE_KSK_WORDS);
+  ok = in != NULL && fclose(in) == 0 && ok && tfhe_wasm_write("build/tfhe-kernel.wasm") &&
+       key_write("build/tfhe-cksk.bin", p->cksk, TFHE_KSK_WORDS) &&
+       key_write("build/tfhe-ksk.bin", k->ksk, TFHE_KSK_WORDS) &&
+       key_write("build/tfhe-bsk.bin", k->bsk_fourier, TFHE_BSK_FOURIER_DOUBLES) && system(cmd) == 0;
+  out = NULL;
+  if (ok) out = fopen("build/tfhe-chain-cast-out.txt", "r");
+  ok = ok && out != NULL;
+  for (c = 0; c < CHAIN_CASTS && ok; c++) ok = read_words(out, chain_cast[c], TFHE_BLOCK_WORDS);
+  if (out != NULL) fclose(out);
+  for (c = 0; c < CHAIN_CASTS && ok; c++) {
+    got = chain_value(chain_cast[c], k);
+    first = bad == 0 && got != chain_slot[c] ? c : first;
+    bad += got != chain_slot[c];
+  }
+  if (bad != 0)
+    printf("FAIL fhe chain cast: %u of %d slots differ, first slot %u = %llu, want %llu\n", bad, CHAIN_CASTS, first,
+           (unsigned long long)chain_value(chain_cast[first], k), (unsigned long long)chain_slot[first]);
+  pass = bad == 0;
+  /* Run A: the radix inputs (none), the block inputs x<i>_<j> = cast i k + j, the params (none). */
+  in = ok ? fopen("build/tfhe-chain-a-in.txt", "w") : NULL;
+  for (j = 0; j < 2u && in != NULL && ok; j++) {
+    ok = fhe_build(&fhe_c, j == 0 ? FHE_TALLY4 : FHE_TALLY3, 7);
+    for (c = 0; c < fhe_c.block_ins && ok; c++)
+      memcpy(fhe_bin[c], chain_cast[(j == 0 ? CHAIN_DEC : CHAIN_BALLOT) + c], sizeof fhe_bin[c]);
+    pbs += fhe_c.pbs;
+    if (ok) fhe_wasm_line(in);
+  }
+  ok = in != NULL && fclose(in) == 0 && ok &&
+       system(tfhe_node_cmd(cmd, sizeof cmd, 0, "build/tfhe-chain-a-in.txt", "build/tfhe-chain-a-out.txt")) == 0;
+  out = NULL;
+  if (ok) out = fopen("build/tfhe-chain-a-out.txt", "r");
+  ok = ok && out != NULL;
+  for (c = 0; c < 7u && ok; c++) ok = read_words(out, (uint64_t *)chain_count[c].block, RADIX_WORDS);
+  if (out != NULL) fclose(out);
+  if (ok) {
+    pass &= chain_tally_row(0, chain_count, k);
+    pass &= chain_tally_row(1, chain_count + 4, k);
+  }
+  ok = ok && chain_stage_rows(k, &pbs, &pass);
+  remove("build/tfhe-cksk.bin");
+  remove("build/tfhe-ksk.bin");
+  remove("build/tfhe-bsk.bin");
+  if (!ok) puts("FAIL fhe chain: a module, a key file, an input or node failed (build/tfhe-chain-*.txt)");
+  if (ok && pass) {
+    remove("build/tfhe-chain-client-in.txt");
+    remove("build/tfhe-chain-client-out.txt");
+    remove("build/tfhe-chain-cast-in.txt");
+    remove("build/tfhe-chain-cast-out.txt");
+    remove("build/tfhe-chain-a-in.txt");
+    remove("build/tfhe-chain-a-out.txt");
+    remove("build/tfhe-chain-b-in.txt");
+    remove("build/tfhe-chain-b-out.txt");
+    remove("build/tfhe-chain-c-in.txt");
+    remove("build/tfhe-chain-c-out.txt");
+    remove("build/tfhe-chain-d-in.txt");
+    remove("build/tfhe-chain-d-out.txt");
+    remove("build/tfhe-chain-e-in.txt");
+    remove("build/tfhe-chain-e-out.txt");
+    printf("fhe chain (N 7): ballots DecE 7 x 4, BallotA 7 x 3 (client module, cast %d PBS); (1.1) tally4, tally3, "
+           "theta, amd, settle, credit, withdraw (%u Wasm PBS); settle C = Wasm\n",
+           CHAIN_CASTS, pbs);
+  }
+  return ok && pass;
+}
+
+static int tfhe_pke_rows(const TfheFft *f, const TfheKeys *k) {
+  static const char key_seed[] = "charter-lang S5 U5 tfhe pke keys";
+  static const char enc_seed[] = "charter-lang S5 U5 pke ballot 01";
+  static TfhePke p;
+  const uint64_t bound = (uint64_t)1 << 40;
+  uint64_t rev[TFHE_POLY_N], prod[TFHE_POLY_N], mask[TFHE_POLY_N], body[TFHE_PLAIN];
+  uint64_t ct[TFHE_BIG_N + 1], out[TFHE_BIG_N + 1], max_error = 0;
+  uint8_t m[TFHE_PLAIN];
+  unsigned j, got, error_log = 0;
+  TfheDrbg d;
+  int ok = 1;
+  tfhe_drbg_init(&d, (const uint8_t *)key_seed);
+  if (!tfhe_pke_generate(&p, k, &d)) {
+    puts("FAIL tfhe pke keys");
+    return 0;
+  }
+  for (j = 0; j < TFHE_POLY_N; j++) rev[j] = p.key[TFHE_POLY_N - 1u - j];
+  tfhe_poly_mul_exact(prod, p.pk_a, rev);
+  for (j = 0; j < TFHE_POLY_N; j++) {
+    uint64_t e = p.pk_b[j] - prod[j];
+    if (e + ((uint64_t)1 << TFHE_PKE_NOISE) > ((uint64_t)1 << (TFHE_PKE_NOISE + 1))) {
+      printf("FAIL tfhe pke key noise %u: %lld\n", j, (long long)e);
+      ok = 0;
+    }
+  }
+  for (j = 0; j < TFHE_PLAIN; j++) m[j] = (uint8_t)j;
+  tfhe_drbg_init(&d, (const uint8_t *)enc_seed);
+  tfhe_pke_encrypt(mask, body, &p, m, TFHE_PLAIN, &d);
+  for (j = 0; j < TFHE_PLAIN; j++) {
+    uint64_t phase, error;
+    tfhe_pke_expand(ct, mask, body[j], j);
+    phase = tfhe_lwe_phase(ct, p.key, TFHE_BIG_N);
+    error = phase - tfhe_encode(j);
+    if (error >> 63) error = 0u - error;
+    if (error > max_error) max_error = error;
+    got = tfhe_decode(phase);
+    if (got != j || error >= bound) {
+      printf("FAIL tfhe pke expand %u: %u, error %llu\n", j, got, (unsigned long long)error);
+      ok = 0;
+    }
+    tfhe_pke_cast(f, out, ct, &p, k);
+    got = tfhe_decode(tfhe_lwe_phase(out, k->glwe_key, TFHE_BIG_N));
+    if (got != j) {
+      printf("FAIL tfhe pke cast %u: %u\n", j, got);
+      ok = 0;
+    }
+  }
+  while (error_log < 64u && (max_error >> error_log) != 0) error_log++;
+  if (ok) {
+    printf("tfhe pke: key noise %d coefficients, expand decode %d rows (max error below 2^%u), cast decode %d rows\n",
+           TFHE_POLY_N, TFHE_PLAIN, error_log, TFHE_PLAIN);
+  }
+  ok = tfhe_pke_wasm_rows(f, k, &p, (const uint8_t *)enc_seed, mask, body) && ok;
+  ok = fhe_chain_rows(k, &p) && ok;
+  tfhe_pke_release(&p);
+  return ok;
+}
+
+static int tfhe_regressions(void) {
+  static const char seed[] = "charter-lang S5 U1 tfhe test key";
+  TfheFft f;
+  TfheKeys k;
+  TfheDrbg d;
+  int ok;
+  tfhe_fft_init(&f);
+  tfhe_drbg_init(&d, (const uint8_t *)seed);
+  if (!tfhe_keys_generate(&k, &f, &d)) {
+    puts("FAIL tfhe keys");
+    return 0;
+  }
+  ok = tfhe_tuniform_rows(&d);
+  ok &= tfhe_fft_rows(&f, &k, &d);
+  ok &= tfhe_pbs_rows(&f, &k, &d);
+  ok &= tfhe_wasm_rows(&f, &d);
+  ok &= tfhe_pbs_wasm_rows(&f, &k, &d);
+  ok &= tfhe_radix_rows(&f, &k, &d);
+  ok &= tfhe_fhe_rows(&f, &k, &d);
+  ok &= tfhe_pke_rows(&f, &k);
+  tfhe_keys_release(&k);
+  return ok;
+}
+
+/* With `--tfhe-wasm FILE`, writes the TFHE kernel test module to FILE (the
+   validity count of test/gate.sh) and runs no row. */
+int main(int argc, char **argv) {
+  int ok = 1;
+  if (argc == 3 && strcmp(argv[1], "--tfhe-wasm") == 0) return tfhe_wasm_write(argv[2]) ? 0 : 1;
+  if (argc == 3 && strcmp(argv[1], "--tfhe-client") == 0) return tfhe_client_write(argv[2]) ? 0 : 1;
   int hashed = poseidon2_regressions();
   if (hashed) puts("poseidon2 regressions: passed");
   ok &= hashed;
@@ -913,6 +2471,9 @@ int main(void) {
   int frost = frost_regressions();
   if (frost) puts("frost regressions: passed");
   ok &= frost;
+  int fhe = tfhe_regressions();
+  if (fhe) puts("tfhe regressions: passed");
+  ok &= fhe;
   if (ok) puts("warning fix regressions: passed");
   return ok ? 0 : 1;
 }

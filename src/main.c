@@ -1,9 +1,11 @@
 /* The langc command line. SHARED by the tcc kits.
    Exit 0: ok. Exit 1: the program is refused. Exit 2: usage or IO. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "front/check.h"
+#include "front/fhe.h"
 #include "front/fmt.h"
 #include "front/front.h"
 #include "front/lower.h"
@@ -52,7 +54,8 @@ static int usage(FILE *err) {
         "       langc ir [--words] PROG\n"
         "       langc abi [--words] PROG\n"
         "       langc build [--words] PROG -o OUT [--runtime]\n"
-        "       langc fmt PROG\n", err);
+        "       langc fmt PROG\n"
+        "       langc fhe N\n", err);
   return 2;
 }
 
@@ -332,7 +335,26 @@ static int run_fmt(const Options *opt, Arena *arena, Diag *diag) {
   return 0;
 }
 
+/* `langc fhe N` (S5 U4a): prints the FHE circuits of front/fhe.h at N
+   ballots. It has its own branch in main(), because parse_options reads
+   argv[2] as PROG. */
+static int run_fhe(int argc, char **argv) {
+  static FheCircuit c;
+  char *end = NULL;
+  unsigned long n = argc == 3 ? strtoul(argv[2], &end, 10) : 0;
+  if (argc != 3 || end == argv[2] || *end != '\0' || n < 1 || n > FHE_N_MAX) return usage(stderr);
+  for (unsigned kind = 0; kind < FHE_PRINTED; kind++) {
+    if (!fhe_build(&c, (FheKind)kind, (unsigned)n)) {
+      fprintf(stderr, "langc: FHE_BUILD: %s\n", c.name);
+      return 1;
+    }
+    fhe_print(&c, stdout);
+  }
+  return fflush(stdout) == 0 ? 0 : 2;
+}
+
 int main(int argc, char **argv) {
+  if (argc >= 2 && strcmp(argv[1], "fhe") == 0) return run_fhe(argc, argv);
   Diag diag;
   diag_init(&diag);
   Options opt;

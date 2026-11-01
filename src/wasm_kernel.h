@@ -18,4 +18,22 @@
  *   8m, else a trap).
  * Returns 0 on a write error. */
 int wasm_write_kernel_test(FILE *out, FILE *err);
+/* Writes the TFHE kernel test module (S5 U2a): the FFT kernels of
+ * src/front/tfhe.c in their C operation order, the twiddle tables of
+ * tfhe_fft_init in a data section, three stream entries, and `memory`:
+ * - fft (2048 poly words) -> the 2048 bits of tfhe_fft_forward (re, then im);
+ * - ifft (the 2048 bits of a TfheFourier) -> tfhe_fft_backward_add into
+ *   zeros;
+ * - polymul (a 2048 words, b 2048 words) -> tfhe_poly_mul_fft (a, b).
+ * Returns 0 on a write error. */
+/* S5 U3b: the byte offset of the KSK words in the TFHE test module (the
+   host `--load`s them there); the BSK doubles follow the KSK words. */
+enum { WASM_TFHE_KSK = 0x800000 };
+
+int wasm_write_tfhe_test(FILE *out, FILE *err);
+/* S5 U5c: writes the TFHE client module (no server keys) with one stream
+ * entry and `memory`: pkenc (seed 4 words, the 32 bytes low byte first;
+ * pk_a 2048, pk_b 2048, m 16) -> (mask 2048, body 16), the tfhe_pke_encrypt
+ * of a fresh DRBG of the seed. Returns 0 on a write error. */
+int wasm_write_tfhe_client(FILE *out, FILE *err);
 #endif

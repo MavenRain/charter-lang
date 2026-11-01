@@ -206,6 +206,24 @@ for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap
   mismatches=$((mismatches + bad))
   [ "$bad" -eq 0 ] || { echo "FAIL differential $f: $bad mismatches, first $(head -n 1 "$tmp/bad.txt")"; fail=$((fail + 1)); }
 done
+# The TFHE kernel test module (f64 ops and a data section, S5 U2a) is valid.
+w="$tmp/tfhe-kernel.wasm"
+wasms=$((wasms + 1))
+if ! build/checktool --tfhe-wasm "$w" 2>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
+  ! wasm-objdump -x "$w" >/dev/null 2>>"$tmp/w.err"; then
+  echo "FAIL wasm tfhe kernel module: $(head -n 1 "$tmp/w.err")"
+  fail=$((fail + 1))
+fi
+# The TFHE client module (S5 U5c) is valid.
+w="$tmp/tfhe-client.wasm"
+wasms=$((wasms + 1))
+if ! build/checktool --tfhe-client "$w" 2>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
+  ! wasm-objdump -x "$w" >/dev/null 2>>"$tmp/w.err"; then
+  echo "FAIL wasm tfhe client module: $(head -n 1 "$tmp/w.err")"
+  fail=$((fail + 1))
+fi
+# The FHE circuits at N 7 (S5 U4a) are the committed text.
+build/langc fhe 7 | cmp -s - test/fhe/circuits-7.txt || { echo "FAIL fhe circuits-7: langc fhe 7 differs"; fail=$((fail + 1)); }
 echo "wasm: $wasms modules valid"
 echo "differential: $cases cases, $mismatches mismatches"
 # A Bool argument larger than 1 traps (langc eval refuses it with EVAL_ARGS).
