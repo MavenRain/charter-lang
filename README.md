@@ -7,9 +7,9 @@ withdrawals as vouchers, and a constitution that amends itself. The host
 is TinyCC. The planned targets are Wasm (client, member node and public
 verifier), a ZK circuit IR and an FHE circuit IR.
 
-## Status (S6a)
+## Status (S6b)
 
-S1, S2a, S2b, S2c, S2d, S3, S4, S5 and S6a are built. The front end has the leaf-lang surface. `langc fmt`
+S1, S2a, S2b, S2c, S2d, S3, S4, S5, S6a and S6b are built. The front end has the leaf-lang surface. `langc fmt`
 prints the one canonical form, and `langc check --json` gives a JSON
 diagnostic with a fix hint and the counts parsed, typed and laws (the law
 definitions that type-check, as `k of m`). Rule R1 is enforced: a domain
@@ -104,8 +104,18 @@ squash PBS (Q-S6-12). `src/front/tdec.c` (U3) gives the threshold
 decryption of a squash LWE. Each party in the set deals the shares of a
 flood noise in [-2^106, 2^106), and the combine checks that the partials
 are on one polynomial of degree t (Q-C7, Q-S6-14, Q-S6-15). The tests use
-C test keys from a test dealer. The epoch keys at enact are planned: S6b
-(`docs/PLAN.md` section 9).
+C test keys from a test dealer.
+
+S6b adds the MPC key generation and the masked re-encryption at enact.
+The 5 parties (n 5, t 2, Q-S6-9) are semi-honest (O10).
+`src/front/tkeygen.c` (U4a) has the coin toss for the public masks, the
+shared random bits for the key bits and the party noise TUniform(b - 1)
+(Q-S6-10). U4b opens the shares into the KSK, the BSK, pk, the cast KSK
+and the squash BSK. U4c runs the S5 chain and the threshold decryption
+under the MPC keys (Q-S6-18). U5 does the masked re-encryption from
+epoch e to epoch e+1 (Q-S6-6 (c), Q-S6-19 (b), Q-S6-20 (a)): the members
+add a joint random r, the epoch e members decrypt m + r, and epoch e+1
+gets Enc(m + r) - Enc(r). There is no switch key.
 
 ## When to reach for charter-lang
 
@@ -116,7 +126,7 @@ C test keys from a test dealer. The epoch keys at enact are planned: S6b
 | hash a value, make a Merkle root or a hash chain step, and verify a FROST signature, in `langc eval` and in Wasm | yes (S4) |
 | tally encrypted ballots and update encrypted credits under TFHE, in C and in Wasm | yes (S5) |
 | decrypt with a threshold of members | yes (S6a) |
-| make the epoch keys at enact | yes, PLANNED (S6b) |
+| make the epoch keys at enact | yes (S6b) |
 | prove membership and ballot well-formedness in a circuit | yes, PLANNED (S7) |
 | verify a transcript as a member node or as a public verifier | yes, PLANNED (S8) |
 | an on-chain escrow on EVM | no: use escrow-lang |
@@ -142,6 +152,11 @@ flags. `make check-squash` builds `build/squashtool` with `cc -O2` and
 runs the full squash PBS rows and the tdec squash rows. It makes one
 squash BSK (812 MB) and takes about 104 s on a quiet machine. It is not
 part of `make check` (Q-S6-13).
+`make check-mpc` builds `build/mpctool` with `cc -O2`. It makes two MPC
+key sets (epoch e and epoch e+1). It runs the S5 chain and the tdec rows
+under the MPC keys, then the re-encryption rows. It takes about 550 s to
+630 s at load average 7 to 8, and the peak memory is 0.94 GiB to
+1.13 GiB. It is not part of `make check` (Q-S6-17).
 
 ## License
 

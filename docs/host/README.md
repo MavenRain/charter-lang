@@ -50,6 +50,11 @@ make -C hosts/tcc-wasm check-clang
 squash PBS rows and the tdec squash rows. It makes one squash BSK
 (812 MB) and takes about 104 s on a quiet machine. It is not part of
 `check` (Q-S6-13).
+`check-mpc` builds `build/mpctool` with `cc -O2`. It makes two MPC
+key sets (epoch e and epoch e+1). It runs the S5 chain and the tdec rows
+under the MPC keys, then the re-encryption rows. It takes about 550 s to
+630 s at load average 7 to 8, and the peak memory is 0.94 GiB to
+1.13 GiB. It is not part of `check` (Q-S6-17).
 The checks need `node`, `wasm-validate`, `wasm-objdump` and `wasm-interp` on the `PATH`.
 `PIN` records the tool versions of the last GREEN gate.
 The build and the gate need no network access.

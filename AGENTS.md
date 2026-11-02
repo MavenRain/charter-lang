@@ -7,7 +7,7 @@ encrypted ballots, a threshold verdict, credits under FHE, withdrawals as
 vouchers and a constitution that amends itself. Do not use it for an
 on-chain escrow (use escrow-lang) or for general-purpose code.
 
-## Status (S6a)
+## Status (S6b)
 
 Built: the tcc-wasm kit pipeline (parse, check, IR, Wasm, differential);
 the leaf-lang surface; `langc fmt` with one canonical form per operation;
@@ -61,9 +61,16 @@ S6a: the key shares over the 192-bit prime field in `src/front/tshare.c`
 the squash PBS in `src/front/squash.c` (Q-S6-1, Q-S6-12;
 `make check-squash`, Q-S6-13); the threshold decryption with dealt flood
 noise in `src/front/tdec.c` (Q-C7, Q-S6-14, Q-S6-15), with C test keys.
+S6b: the MPC key generation in `src/front/tkeygen.c` with 5 semi-honest
+parties (Q-S6-3 (c), Q-S6-9, O10): the coin toss for the public masks, the
+shared random bits and the party noise TUniform(b - 1) (Q-S6-10); the
+openings into the KSK, BSK, pk, cast KSK and squash BSK; the S5 chain and
+the threshold decryption under the MPC keys (Q-S6-18); the masked
+re-encryption from epoch e to epoch e+1 (Q-S6-6 (c), Q-S6-19 (b),
+Q-S6-20 (a)); `make check-mpc` (Q-S6-17).
 
 Planned (`docs/PLAN.md` sections 7 and 9). Do not cite these as built:
-- MPC key generation (n 5, t 2) and masked re-encryption at enact (S6b).
+- malicious security for the S6b MPC (O10, it needs the S7 proofs).
 - the honest-signer part of Prop 3.4 (S8).
 - the general proofs of Invariant I and Conservation (open).
 - `skills/charter-lang/SKILL.md` with 3 to 5 graded examples (S9).

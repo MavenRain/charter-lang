@@ -8,6 +8,7 @@
 #include "front/squash.h"
 #include "front/tdec.h"
 #include "front/tfhe.h"
+#include "front/tkeygen.h"
 #include "front/tshare.h"
 #include "wasm_kernel.h"
 
@@ -3063,6 +3064,341 @@ static int tfhe_regressions(uint64_t small_key[TFHE_LWE_N]) {
   return ok;
 }
 
+/* The tkeygen rows (S6b U4a, W/S6-NOTES.md "## S6b plan", r1 to r5). */
+enum { TKEYGEN_ROW_BITS = 64, TKEYGEN_ROW_NOISE = 820, TKEYGEN_ROW_DEGREE = 16 };
+
+/* The 10 sets of 3 parties. */
+static const unsigned tkeygen_subsets[10][3] = {{1, 2, 3}, {1, 2, 4}, {1, 2, 5}, {1, 3, 4}, {1, 3, 5},
+                                                {1, 4, 5}, {2, 3, 4}, {2, 3, 5}, {2, 4, 5}, {3, 4, 5}};
+static const unsigned tkeygen_all[TSHARE_PARTIES] = {1, 2, 3, 4, 5};
+
+/* The Lagrange coefficients at 0 of each set of 3 and of the 5 parties. */
+typedef struct TkeygenLambda {
+  TshareFe set[10][3];
+  TshareFe all[TSHARE_PARTIES];
+} TkeygenLambda;
+
+static int tkeygen_lambda(TkeygenLambda *l) {
+  unsigned s;
+  int ok = tshare_lagrange(l->all, tkeygen_all, TSHARE_PARTIES);
+  for (s = 0; s < 10; s++) ok &= tshare_lagrange(l->set[s], tkeygen_subsets[s], 3);
+  return ok;
+}
+
+/* The 5 party DRBGs: party j from SEED with its last byte set to the digit j. */
+static void tkeygen_parties(TfheDrbg party[TSHARE_PARTIES], const char *seed) {
+  uint8_t s[TFHE_SEED_BYTES];
+  unsigned j;
+  memcpy(s, seed, TFHE_SEED_BYTES);
+  for (j = 0; j < TSHARE_PARTIES; j++) {
+    s[TFHE_SEED_BYTES - 1] = (uint8_t)('1' + j);
+    tfhe_drbg_init(&party[j], s);
+  }
+}
+
+/* The value at 0 of secret J (the layout of tshare_share with COUNT) from the
+ * shares of the M parties in SUBSET; LAMBDA holds their coefficients. */
+static TshareFe tkeygen_at0(const TshareFe *lambda, const TshareFe *shares, size_t count, size_t j,
+                            const unsigned *subset, unsigned m) {
+  TshareFe v = tshare_from_u64(0);
+  unsigned i;
+  for (i = 0; i < m; i++) v = tshare_add(v, tshare_mul(lambda[i], shares[(subset[i] - 1) * count + j]));
+  return v;
+}
+
+/* (r1) The 5 parties get the same joint seed and the same masks; a changed
+ * seed or commitment of one party gives no joint seed. */
+static int tkeygen_toss_rows(TfheDrbg party[TSHARE_PARTIES]) {
+  static TkeygenToss toss, view;
+  uint8_t joint[SHA512_BYTES], want[SHA512_BYTES];
+  TfheDrbg masks, direct;
+  Sha512 s;
+  uint64_t first;
+  unsigned i, j;
+  int ok = 1;
+  for (j = 1; j <= TSHARE_PARTIES; j++) ok &= tkeygen_toss_draw(&toss, j, &party[j - 1]);
+  ok &= tkeygen_toss_check(&toss) && memcmp(toss.seed[0], toss.seed[1], TKEYGEN_SEED_BYTES) != 0;
+  sha512_init(&s);
+  for (j = 0; j < TSHARE_PARTIES; j++) sha512_update(&s, toss.seed[j], TKEYGEN_SEED_BYTES);
+  sha512_final(&s, want);
+  tfhe_drbg_init(&direct, want);
+  first = tfhe_uniform(&direct);
+  /* Each party uses its own copy of the commitments and the seeds. */
+  for (i = 0; i < TSHARE_PARTIES; i++) {
+    view = toss;
+    ok &= tkeygen_toss_joint(joint, &masks, &view) && memcmp(joint, want, SHA512_BYTES) == 0 &&
+          tfhe_uniform(&masks) == first;
+  }
+  for (j = 0; j < TSHARE_PARTIES; j++) {
+    view = toss;
+    view.seed[j][j] ^= 1u;
+    ok &= !tkeygen_toss_check(&view) && !tkeygen_toss_joint(joint, &masks, &view);
+    view = toss;
+    view.commit[j][SHA512_BYTES - 1] ^= 0x80u;
+    ok &= !tkeygen_toss_joint(joint, &masks, &view);
+  }
+  ok &= !tkeygen_toss_draw(&view, 0, &party[0]) && !tkeygen_toss_draw(&view, 6, &party[0]);
+  return ok;
+}
+
+/* (r2) 64 shared bits: the 10 sets of 3 give one value, 0 or 1; both occur. */
+static int tkeygen_bit_rows(TfheDrbg party[TSHARE_PARTIES], const TkeygenLambda *l) {
+  static TshareFe bits[TSHARE_PARTIES * TKEYGEN_ROW_BITS];
+  const TshareFe zero = tshare_from_u64(0), one = tshare_from_u64(1);
+  unsigned j, s, ones = 0;
+  int ok = 1;
+  tkeygen_bits(bits, TKEYGEN_ROW_BITS, party);
+  for (j = 0; j < TKEYGEN_ROW_BITS; j++) {
+    TshareFe v = tkeygen_at0(l->set[0], bits, TKEYGEN_ROW_BITS, j, tkeygen_subsets[0], 3);
+    ok &= tshare_eq(v, zero) || tshare_eq(v, one);
+    ones += (unsigned)tshare_eq(v, one);
+    for (s = 1; s < 10; s++)
+      ok &= tshare_eq(tkeygen_at0(l->set[s], bits, TKEYGEN_ROW_BITS, j, tkeygen_subsets[s], 3), v);
+  }
+  return ok && ones > 0 && ones < TKEYGEN_ROW_BITS;
+}
+
+/* (r3) The 5 opened shares are not the r_i^2 (the zero sharing is in), and
+ * their degree-2t polynomial has the value r^2 at 0. */
+static int tkeygen_square_rows(TfheDrbg party[TSHARE_PARTIES], const TkeygenLambda *l) {
+  TkeygenBit b;
+  TshareFe r, v;
+  unsigned i, n;
+  int ok = 1;
+  for (n = 0; n < 8; n++) {
+    ok &= tkeygen_bit_try(&b, party);
+    r = tkeygen_at0(l->set[n], b.r, 1, 0, tkeygen_subsets[n], 3);
+    v = tkeygen_at0(l->all, b.opened, 1, 0, tkeygen_all, TSHARE_PARTIES);
+    ok &= tshare_eq(v, tshare_mul(r, r)) && tshare_eq(b.square, v);
+    for (i = 0; i < TSHARE_PARTIES; i++) ok &= !tshare_eq(b.opened[i], tshare_mul(b.r[i], b.r[i]));
+  }
+  return ok;
+}
+
+/* (r4) Party noise, 5 x 820 samples for each b - 1 in {16, 44}: each
+ * |e| <= 2^(b - 1) and one |e| > 2^(b - 2) at least; the dealt shares give the
+ * sum of the 5 noises (degree t: each set of 3; degree 2t: the 5 parties). */
+static int tkeygen_noise_rows(TfheDrbg party[TSHARE_PARTIES], const TkeygenLambda *l) {
+  static TshareFe shares[TSHARE_PARTIES * TKEYGEN_ROW_NOISE], sum[TSHARE_PARTIES * TKEYGEN_ROW_NOISE];
+  static uint64_t e[TSHARE_PARTIES][TKEYGEN_ROW_NOISE];
+  static const unsigned set_log[2] = {TFHE_GLWE_NOISE, TFHE_LWE_NOISE};
+  const uint64_t big = (uint64_t)1 << 62;
+  unsigned s, j, k;
+  int ok = 1;
+  ok &= tshare_eq(tkeygen_lift(0u - (uint64_t)1), tshare_from_i64(-1)) &&
+        tshare_eq(tkeygen_lift(big), tshare_from_u64(big)) &&
+        tshare_eq(tkeygen_lift(0u - big), tshare_sub(tshare_from_u64(0), tshare_from_u64(big)));
+  for (s = 0; s < 2; s++) {
+    const uint64_t bound = (uint64_t)1 << (set_log[s] - 1u);
+    unsigned above = 0;
+    for (k = 0; k < TSHARE_PARTIES * TKEYGEN_ROW_NOISE; k++) sum[k] = tshare_from_u64(0);
+    for (j = 0; j < TSHARE_PARTIES; j++) {
+      tkeygen_noise(shares, e[j], TKEYGEN_ROW_NOISE, set_log[s], TKEYGEN_DEGREE_T, &party[j]);
+      tkeygen_add(sum, shares, TKEYGEN_ROW_NOISE);
+      for (k = 0; k < TKEYGEN_ROW_NOISE; k++) {
+        const uint64_t m = e[j][k] >> 63 ? 0u - e[j][k] : e[j][k];
+        ok &= m <= bound;
+        above += (unsigned)(m > bound / 2u);
+      }
+    }
+    ok &= above > 0;
+    for (k = 0; k < TKEYGEN_ROW_NOISE; k++) {
+      uint64_t t = 0;
+      for (j = 0; j < TSHARE_PARTIES; j++) t += e[j][k];
+      ok &= tshare_eq(tkeygen_at0(l->set[k % 10], sum, TKEYGEN_ROW_NOISE, k, tkeygen_subsets[k % 10], 3),
+                      tkeygen_lift(t));
+    }
+    tkeygen_noise(shares, e[0], TKEYGEN_ROW_DEGREE, set_log[s], TKEYGEN_DEGREE_2T, &party[1]);
+    for (k = 0; k < TKEYGEN_ROW_DEGREE; k++)
+      ok &= tshare_eq(tkeygen_at0(l->all, shares, TKEYGEN_ROW_DEGREE, k, tkeygen_all, TSHARE_PARTIES),
+                      tkeygen_lift(e[0][k]));
+  }
+  return ok;
+}
+
+/* (r5) A degree-t dealing is tshare_share and each set of 3 gives the
+ * secret; a degree-2t dealing gives the secret from the 5 parties and from no
+ * set of 3 (it is not on a degree-t polynomial). */
+static int tkeygen_degree_rows(TfheDrbg party[TSHARE_PARTIES], const TkeygenLambda *l) {
+  static TshareFe secret[TKEYGEN_ROW_DEGREE], low[TSHARE_PARTIES * TKEYGEN_ROW_DEGREE],
+      plain[TSHARE_PARTIES * TKEYGEN_ROW_DEGREE], high[TSHARE_PARTIES * TKEYGEN_ROW_DEGREE];
+  TfheDrbg a = party[0], b = party[0];
+  unsigned k, s;
+  int ok = tkeygen_degree(TKEYGEN_DEGREE_T) == 2 && tkeygen_degree(TKEYGEN_DEGREE_2T) == 4;
+  for (k = 0; k < TKEYGEN_ROW_DEGREE; k++) secret[k] = tshare_random(&party[1]);
+  tkeygen_deal(low, secret, TKEYGEN_ROW_DEGREE, TKEYGEN_DEGREE_T, &a);
+  tshare_share(plain, secret, TKEYGEN_ROW_DEGREE, &b);
+  ok &= memcmp(low, plain, sizeof low) == 0;
+  tkeygen_deal(high, secret, TKEYGEN_ROW_DEGREE, TKEYGEN_DEGREE_2T, &party[2]);
+  for (k = 0; k < TKEYGEN_ROW_DEGREE; k++) {
+    ok &= tshare_eq(tkeygen_at0(l->all, high, TKEYGEN_ROW_DEGREE, k, tkeygen_all, TSHARE_PARTIES), secret[k]);
+    for (s = 0; s < 10; s++) {
+      ok &= tshare_eq(tkeygen_at0(l->set[s], low, TKEYGEN_ROW_DEGREE, k, tkeygen_subsets[s], 3), secret[k]);
+      ok &= !tshare_eq(tkeygen_at0(l->set[s], high, TKEYGEN_ROW_DEGREE, k, tkeygen_subsets[s], 3), secret[k]);
+    }
+  }
+  return ok;
+}
+
+static int tkeygen_regressions(void) {
+  static const char seed[] = "charter-lang S6b U4a tkeygen!!!!";
+  TfheDrbg party[TSHARE_PARTIES];
+  TkeygenLambda l;
+  int ok;
+  tkeygen_parties(party, seed);
+  ok = tkeygen_lambda(&l);
+  ok &= tkeygen_toss_rows(party);
+  ok &= tkeygen_bit_rows(party, &l);
+  ok &= tkeygen_square_rows(party, &l);
+  ok &= tkeygen_noise_rows(party, &l);
+  ok &= tkeygen_degree_rows(party, &l);
+  return ok;
+}
+
+/* The tkeygen opening rows (S6b U4b, W/S6-NOTES.md "## S6b plan" steps 6 and
+ * 7, o1 to o5). After the U4a rows: they use tkeygen_parties, tkeygen_lambda,
+ * tkeygen_at0 and tkeygen_subsets. */
+
+/* The test keys: clear random bits and their shares (degree t, from a dealer
+ * DRBG). The openings use the shares. The checks use the clear keys, after a
+ * check that the shares of the parties 2, 4 and 5 give them. */
+typedef struct TkeygenTest {
+  TkeygenShares s;
+  TkeygenWork w;
+  uint64_t lwe[TFHE_LWE_N];
+  uint64_t glwe[TFHE_POLY_N];
+  TfheDrbg masks;
+  TfheDrbg party[TSHARE_PARTIES];
+} TkeygenTest;
+
+/* |E| <= 5 2^(B - 1): the bound of the sum of the 5 party noises. */
+static int tkeygen_small(int64_t e, unsigned b) {
+  const int64_t bound = (int64_t)5 << (b - 1u);
+  return e >= -bound && e <= bound;
+}
+
+/* 1 when the shares of the parties 2, 4 and 5 (set 8) give the clear bit of
+ * each of the COUNT secrets. */
+static int tkeygen_test_back(const TkeygenLambda *l, const TshareFe *shares, size_t count, const uint64_t *bit) {
+  size_t j;
+  int ok = 1;
+  for (j = 0; j < count; j++)
+    ok &= tshare_eq(tkeygen_at0(l->set[8], shares, count, j, tkeygen_subsets[8], 3), tshare_from_u64(bit[j]));
+  return ok;
+}
+
+static int tkeygen_test_init(TkeygenTest *t) {
+  static const char seed[] = "charter-lang S6b U4b openings!!!";
+  TshareFe *secret = malloc(SQUASH_BIG_N * sizeof *secret);
+  uint64_t *bit = malloc(SQUASH_BIG_N * sizeof *bit);
+  TkeygenLambda l;
+  TfheDrbg d;
+  size_t j;
+  int ok;
+  if (secret == NULL || bit == NULL) {
+    free(secret);
+    free(bit);
+    return 0;
+  }
+  tkeygen_parties(t->party, seed);
+  tfhe_drbg_init(&t->masks, (const uint8_t *)"charter-lang S6b U4b coin toss!!");
+  tfhe_drbg_init(&d, (const uint8_t *)"charter-lang S6b U4b the dealer!");
+  tkeygen_work_init(&t->w);
+  ok = tkeygen_lambda(&l);
+  for (j = 0; j < TFHE_LWE_N; j++) {
+    t->lwe[j] = tfhe_drbg_bytes(&d, 1) & 1u;
+    secret[j] = tshare_from_u64(t->lwe[j]);
+  }
+  tshare_share(&t->s.lwe[0][0], secret, TFHE_LWE_N, &d);
+  for (j = 0; j < TFHE_POLY_N; j++) {
+    t->glwe[j] = tfhe_drbg_bytes(&d, 1) & 1u;
+    secret[j] = tshare_from_u64(t->glwe[j]);
+  }
+  tshare_share(&t->s.glwe[0][0], secret, TFHE_POLY_N, &d);
+  for (j = 0; j < SQUASH_BIG_N; j++) {
+    bit[j] = tfhe_drbg_bytes(&d, 1) & 1u;
+    secret[j] = tshare_from_u64(bit[j]);
+  }
+  tshare_share(&t->s.squash[0][0], secret, SQUASH_BIG_N, &d);
+  ok &= tkeygen_test_back(&l, &t->s.lwe[0][0], TFHE_LWE_N, t->lwe);
+  ok &= tkeygen_test_back(&l, &t->s.glwe[0][0], TFHE_POLY_N, t->glwe);
+  ok &= tkeygen_test_back(&l, &t->s.squash[0][0], SQUASH_BIG_N, bit);
+  free(secret);
+  free(bit);
+  return ok;
+}
+
+/* The first small key bit that is 1 (the GGSW rows use it). */
+static size_t tkeygen_test_one(const TkeygenTest *t) {
+  size_t i = 0;
+  while (i + 1 < TFHE_LWE_N && t->lwe[i] == 0) i++;
+  return i;
+}
+
+/* (o1) One KSK row (glwe bit 7, level 2): the phase under the small key is
+ * bit 2^56 plus a noise of at most 5 2^44. (o4, LWE) The phase minus the
+ * plaintext is the noise sum of the 5 dealers (exact). */
+static int tkeygen_lwe_open_rows(TkeygenTest *t) {
+  uint64_t ct[TFHE_LWE_N + 1], esum, phase;
+  TshareFe plain[TSHARE_PARTIES];
+  const TshareFe g = tshare_from_u64((uint64_t)1 << 56);
+  unsigned i;
+  for (i = 0; i < TSHARE_PARTIES; i++) plain[i] = tshare_mul(g, t->s.glwe[i][7]);
+  tkeygen_lwe_row(ct, &esum, &t->s.lwe[0][0], TFHE_LWE_N, plain, TFHE_LWE_NOISE, &t->masks, t->party);
+  phase = tfhe_lwe_phase(ct, t->lwe, TFHE_LWE_N) - (t->glwe[7] << 56);
+  return phase == esum && esum != 0 && tkeygen_small((int64_t)esum, TFHE_LWE_NOISE);
+}
+
+/* GGSW I0 of the BSK (I0: tkeygen_test_one). (o2) Row 1 (a linear GLWE
+ * opening, N 2048): the phase is s g at coefficient 0 plus a noise of at most
+ * 5 2^16. (o3) Row 0 (the product opening): the phase is e - s g S. (o4,
+ * GLWE) The phase minus the plaintext is the noise sum (exact). (o5) The mask
+ * of each row is the coin-toss mask. */
+static int tkeygen_glwe_open_rows(TkeygenTest *t) {
+  uint64_t *ct = malloc(4 * TFHE_POLY_N * sizeof *ct), *prod = malloc(TFHE_POLY_N * sizeof *prod);
+  const uint64_t g = (uint64_t)1 << (64 - TFHE_PBS_BASE_LOG);
+  const size_t i0 = tkeygen_test_one(t);
+  TfheDrbg m0;
+  uint64_t want[2], nonzero = 0;
+  unsigned row;
+  size_t c;
+  int ok = 1;
+  if (ct == NULL || prod == NULL) {
+    free(ct);
+    free(prod);
+    return 0;
+  }
+  tkeygen_load(&t->w, &t->s, TKEYGEN_KEY_GLWE);
+  m0 = t->masks;
+  tkeygen_bsk_ggsw(&t->w, ct, i0, &t->s, &t->masks, t->party);
+  for (row = 0; row < 2; row++) {
+    const uint64_t *a = ct + row * 2 * TFHE_POLY_N;
+    tfhe_poly_mul_exact(prod, a, t->glwe);
+    for (c = 0; c < TFHE_POLY_N; c++) {
+      const uint64_t e = t->w.esum[row][c];
+      want[0] = 0u - g * t->lwe[i0] * t->glwe[c];
+      want[1] = c == 0 ? g * t->lwe[i0] : 0u;
+      ok &= a[TFHE_POLY_N + c] - prod[c] - want[row] == e && tkeygen_small((int64_t)e, TFHE_GLWE_NOISE);
+      ok &= a[c] == tfhe_uniform(&m0);
+      nonzero |= e;
+    }
+  }
+  free(ct);
+  free(prod);
+  return ok && t->lwe[i0] == 1 && nonzero != 0;
+}
+
+static int tkeygen_open_regressions(void) {
+  TkeygenTest *t = calloc(1, sizeof *t);
+  int ok;
+  if (t == NULL) return 0;
+  ok = tkeygen_test_init(t);
+  ok &= tkeygen_lwe_open_rows(t);
+  ok &= tkeygen_glwe_open_rows(t);
+  free(t);
+  return ok;
+}
+
 /* With `--tfhe-wasm FILE`, writes the TFHE kernel test module to FILE (the
    validity count of test/gate.sh) and runs no row. */
 int main(int argc, char **argv) {
@@ -3114,6 +3450,12 @@ int main(int argc, char **argv) {
   int tdec_ok = tdec_regressions();
   if (tdec_ok) puts("tdec regressions: passed");
   ok &= tdec_ok;
+  int keygen = tkeygen_regressions();
+  if (keygen) puts("tkeygen regressions: passed");
+  ok &= keygen;
+  int opened = tkeygen_open_regressions();
+  if (opened) puts("tkeygen openings regressions: passed");
+  ok &= opened;
   if (ok) puts("warning fix regressions: passed");
   return ok ? 0 : 1;
 }
