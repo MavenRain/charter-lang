@@ -57,7 +57,8 @@ static int tdec_run(Squash128 *phase, TshareFe *partial, const TshareFe *shares,
   unsigned i;
   for (i = 0; i < m; i++) tdec_flood(noise + i * TSHARE_PARTIES, d);
   for (i = 0; i < m; i++)
-    partial[i] = tdec_partial(shares + (size_t)(subset[i] - 1) * SQUASH_BIG_N, mask, noise, m, subset[i]);
+    if (!tdec_partial(partial + i, shares + (size_t)(subset[i] - 1) * SQUASH_BIG_N, mask, noise, m, subset[i]))
+      return 0;
   return tdec_combine(phase, body, partial, subset, m);
 }
 

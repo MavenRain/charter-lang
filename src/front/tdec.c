@@ -67,12 +67,15 @@ void tdec_flood(TshareFe noise[TSHARE_PARTIES], TfheDrbg *d) {
   tshare_share(noise, &lift, 1, d);
 }
 
-TshareFe tdec_partial(const TshareFe share[SQUASH_BIG_N], const Squash128 mask[SQUASH_BIG_N], const TshareFe *noise,
-                      unsigned dealers, unsigned party) {
-  TshareFe v = tdec_mask_product(share, mask);
+int tdec_partial(TshareFe *partial, const TshareFe share[SQUASH_BIG_N], const Squash128 mask[SQUASH_BIG_N],
+                 const TshareFe *noise, unsigned dealers, unsigned party) {
+  TshareFe v;
   unsigned j;
+  if (party == 0 || party > TSHARE_PARTIES) return 0;
+  v = tdec_mask_product(share, mask);
   for (j = 0; j < dealers; j++) v = tshare_add(v, noise[j * TSHARE_PARTIES + party - 1]);
-  return v;
+  *partial = v;
+  return 1;
 }
 
 /* The value at 0 of the polynomial of degree t through the partials at the

@@ -26,9 +26,11 @@ TshareFe tdec_mask_product(const TshareFe share[SQUASH_BIG_N], const Squash128 m
 void tdec_flood(TshareFe noise[TSHARE_PARTIES], TfheDrbg *d);
 
 /* The partial of PARTY (1 to 5): tdec_mask_product of its key share and MASK,
- * plus noise[j 5 + PARTY - 1] for each dealer j (0 to DEALERS - 1). */
-TshareFe tdec_partial(const TshareFe share[SQUASH_BIG_N], const Squash128 mask[SQUASH_BIG_N], const TshareFe *noise,
-                      unsigned dealers, unsigned party);
+ * plus noise[j 5 + PARTY - 1] for each dealer j (0 to DEALERS - 1). Writes
+ * it to PARTIAL and returns 1. Returns 0 and writes no partial when PARTY is
+ * not 1 to 5: then it reads no share and no noise. */
+int tdec_partial(TshareFe *partial, const TshareFe share[SQUASH_BIG_N], const Squash128 mask[SQUASH_BIG_N],
+                 const TshareFe *noise, unsigned dealers, unsigned party);
 
 /* Combines the M partials (partial[i] is from party subset[i]). Writes the
  * phase BODY - (<a, s> + E) mod 2^128 and returns 1. Returns 0 and writes

@@ -2898,7 +2898,8 @@ static int tdec_run(Squash128 *phase, TshareFe *partial, const TshareFe *shares,
   unsigned i;
   for (i = 0; i < m; i++) tdec_flood(noise + i * TSHARE_PARTIES, d);
   for (i = 0; i < m; i++)
-    partial[i] = tdec_partial(shares + (size_t)(subset[i] - 1) * SQUASH_BIG_N, mask, noise, m, subset[i]);
+    if (!tdec_partial(partial + i, shares + (size_t)(subset[i] - 1) * SQUASH_BIG_N, mask, noise, m, subset[i]))
+      return 0;
   return tdec_combine(phase, body, partial, subset, m);
 }
 
@@ -2928,7 +2929,9 @@ static int tdec_small(TshareFe v) {
  * (p - 1) / 2). A set of 2, a bad set, and one changed partial give no phase.
  * The flood row: the value at 0 minus the clear <a, s> is E, not 0, with
  * |E| below 5 2^106. The flood sign row: the shares of a flood noise e give
- * e at 0 for e >= 0 and p - |e| for e < 0. */
+ * e at 0 for e >= 0 and p - |e| for e < 0. The party guard row (F-U5-1):
+ * party 0 and party 6 give no partial; party 1 and party 5 give the old
+ * value. */
 static int tdec_regressions(void) {
   static const char seed[] = "charter-lang S6 U3 tdec seed!!!!";
   static SquashKey k;
@@ -3035,6 +3038,19 @@ static int tdec_regressions(void) {
     neg += sgn;
   }
   ok &= neg > 0 && neg < 8;
+
+  /* The party guard row (F-U5-1, Q-S7-U5-2 (a)). X holds the 5 noise
+   * shares of one dealer. Party 0 and party 6 return 0 and leave v0 as it
+   * was (they read no share and no noise: x[-1] and x[5] are outside X).
+   * Party 1 and party 5 return 1 and the old value, the mask product of the
+   * key share plus x[party - 1]. */
+  v0 = tshare_from_u64(77);
+  ok &= !tdec_partial(&v0, shares, mask, x, 1, 0) && tshare_eq(v0, tshare_from_u64(77));
+  ok &= !tdec_partial(&v0, shares, mask, x, 1, 6) && tshare_eq(v0, tshare_from_u64(77));
+  e = tshare_add(tdec_mask_product(shares, mask), x[0]);
+  ok &= tdec_partial(&v0, shares, mask, x, 1, 1) && tshare_eq(v0, e);
+  e = tshare_add(tdec_mask_product(shares + 4 * SQUASH_BIG_N, mask), x[4]);
+  ok &= tdec_partial(&v0, shares + 4 * SQUASH_BIG_N, mask, x, 1, 5) && tshare_eq(v0, e);
   return ok;
 }
 

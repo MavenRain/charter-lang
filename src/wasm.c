@@ -2890,7 +2890,9 @@ int wasm_write_tfhe_test(FILE *out, FILE *err) {
    SHA-512 kernel (block c = the SHA-512 of the seed and of c as 8 bytes,
    little endian). Memory: the stream input and the output block below
    CLIENT_DIN; then the DRBG input (its last word is the counter), the used
-   count, the block and the SHA-512 scratch; then rev(r) and c. */
+   count, the block and the SHA-512 scratch; then rev(r) and c. S7 U7
+   (D141): then the saved vote tail, the Poseidon2 scratch, digest and pair
+   words, and the vote or motion output block at CLIENT_VOUT. */
 enum {
   CLIENT_K = TFHE_PLAIN,
   CLIENT_PK_A = 8 * 4,
@@ -2905,14 +2907,36 @@ enum {
   CLIENT_SCRATCH = CLIENT_DIN + 0x80,
   CLIENT_REV = CLIENT_DIN + 0x1000,
   CLIENT_C = CLIENT_REV + 8 * TFHE_POLY_N,
-  CLIENT_PAGES = (CLIENT_C + 8 * TFHE_POLY_N + 0xFFFF) / 0x10000
+  CLIENT_VTAIL = CLIENT_C + 8 * TFHE_POLY_N,
+  CLIENT_P2S = CLIENT_VTAIL + 0x400,
+  CLIENT_P2D = CLIENT_P2S + 0x200,
+  CLIENT_P2W = CLIENT_P2D + 0x80,
+  CLIENT_VOUT = CLIENT_VTAIL + 0x1000,
+  CLIENT_VOTE_IN = CLIENT_IN + 8 + 64,
+  CLIENT_VOTE_OUT = 4256,
+  CLIENT_MOTION_IN = 74,
+  CLIENT_MOTION_OUT = 82,
+  CLIENT_PAGES = (CLIENT_VOUT + 8 * (CLIENT_VOTE_OUT + 1) + 0xFFFF) / 0x10000
 };
 
-enum { CLIENT_SHA512, CLIENT_DRBG_BYTES, CLIENT_TUNIFORM, CLIENT_POLY, CLIENT_ENTRY_PKENC, CLIENT_FUNCS };
+/* S7 U7 (D141): the Poseidon2 kernel K + 0 .. K + 4 at K = CLIENT_P2 (no
+   merkle), then the vote and motion entries. No S5 index moves. */
+enum {
+  CLIENT_SHA512,
+  CLIENT_DRBG_BYTES,
+  CLIENT_TUNIFORM,
+  CLIENT_POLY,
+  CLIENT_ENTRY_PKENC,
+  CLIENT_P2,
+  CLIENT_ENTRY_VOTE = CLIENT_P2 + KERNEL_MERKLE,
+  CLIENT_ENTRY_MOTION,
+  CLIENT_FUNCS
+};
 
 /* Types: 0 (i32 x 3) -> (), 1 (i32) -> i64, 2 (i64 x 4) -> (), 3 the entry
-   (i64) -> i64. */
-static const unsigned char client_types[CLIENT_FUNCS] = {2, 1, 1, 0, 3};
+   (i64) -> i64; then the kernel types 4 reduce (i64 x 10) -> (), 5 mul and
+   add (i64 x 3) -> (), 6 permute (i64 x 2) -> (), 7 hash (i64 x 5) -> (). */
+static const unsigned char client_types[CLIENT_FUNCS] = {2, 1, 1, 0, 3, 4, 5, 5, 6, 7, 3, 3};
 
 /* drbg_bytes (n) -> i64, n in 1 .. 8: the next N DRBG bytes, the first in
    the low byte, as tfhe_drbg_bytes (a new block when 64 bytes are used). */
@@ -2989,17 +3013,27 @@ static int client_j8(Sink *s) {
   return op2(s, OP_LOCAL_GET, CE_J) && i32_const(s, 3) && put_byte(s, OP_I32_SHL);
 }
 
-static int part_client_pkenc(Sink *s, const void *arg) {
+/* The locals of an entry after n: h (i64), j and an address (i32). */
+static int client_locals(Sink *s) {
+  return put_uleb(s, 2) && put_uleb(s, 1) && put_byte(s, TYPE_I64) && put_uleb(s, 2) && put_byte(s, TYPE_I32);
+}
+
+/* A fresh DRBG from the 4 seed words at byte 0: the seed to CLIENT_DIN,
+   counter 0, used 64 (the next draw makes block 0). */
+static int client_drbg_reset(Sink *s) {
   unsigned w;
-  int ok = put_uleb(s, 2) && put_uleb(s, 1) && put_byte(s, TYPE_I64) && put_uleb(s, 2) && put_byte(s, TYPE_I32) &&
-           count_guard(s, CLIENT_IN) && heap_local(s) && base_of(s, CE_H) && i64_const(s, CLIENT_OUT) &&
-           memarg(s, OP_I64_STORE, 0);
-  (void)arg;
+  int ok = 1;
   for (w = 0; w < TFHE_SEED_BYTES / 8u && ok; w++)
     ok = i32_const(s, 0) && i32_const(s, 0) && mem_at(s, OP_I64_LOAD, 8u * w) &&
          mem_at(s, OP_I64_STORE, CLIENT_DIN + 8u * w);
   return ok && i32_const(s, 0) && i64_const(s, 0) && mem_at(s, OP_I64_STORE, CLIENT_COUNTER) && i32_const(s, 0) &&
-         i64_const(s, SHA512_BYTES) && mem_at(s, OP_I64_STORE, CLIENT_USED) && client_loop(s) &&
+         i64_const(s, SHA512_BYTES) && mem_at(s, OP_I64_STORE, CLIENT_USED);
+}
+
+static int part_client_pkenc(Sink *s, const void *arg) {
+  (void)arg;
+  return client_locals(s) && count_guard(s, CLIENT_IN) && heap_local(s) && base_of(s, CE_H) &&
+         i64_const(s, CLIENT_OUT) && memarg(s, OP_I64_STORE, 0) && client_drbg_reset(s) && client_loop(s) &&
          i32_const(s, CLIENT_REV + 8u * (TFHE_POLY_N - 1u)) && client_j8(s) && put_byte(s, OP_I32_SUB) &&
          i32_const(s, 1) && op2(s, OP_CALL, CLIENT_DRBG_BYTES) && i64_const(s, 1) && put_byte(s, OP_I64_AND) &&
          mem_at(s, OP_I64_STORE, 0) && loop_tail(s, CE_J, 0, 1, 0, TFHE_POLY_N) && tfhe_out(s) &&
@@ -3017,10 +3051,117 @@ static int part_client_pkenc(Sink *s, const void *arg) {
          loop_tail(s, CE_J, 0, 1, 0, CLIENT_K) && op2(s, OP_LOCAL_GET, CE_H) && put_byte(s, OP_END);
 }
 
+/* S7 U7 (D139 to D141): the vote and motion witness entries. */
+
+/* The byte address of data word I of the output block (word 0 is the
+   count). */
+static uint32_t client_out(uint32_t i) {
+  return CLIENT_VOUT + 8u * (1u + i);
+}
+
+/* Copies N words from SRC to DST (byte addresses), with the loop local j. */
+static int client_copy(Sink *s, uint32_t dst, uint32_t src, uint32_t n) {
+  return client_loop(s) && client_j8(s) && client_j8(s) && mem_at(s, OP_I64_LOAD, src) &&
+         mem_at(s, OP_I64_STORE, dst) && loop_tail(s, CE_J, 0, 1, 0, n);
+}
+
+/* Word 0 of the output block: its count N. */
+static int client_head(Sink *s, uint64_t n) {
+  return i32_const(s, 0) && i64_const(s, n) && mem_at(s, OP_I64_STORE, CLIENT_VOUT);
+}
+
+/* N tuniform(TFHE_PKE_NOISE) draws to the words at AT. */
+static int client_noise(Sink *s, uint32_t at, uint32_t n) {
+  return client_loop(s) && client_j8(s) && i32_const(s, TFHE_PKE_NOISE) && op2(s, OP_CALL, CLIENT_TUNIFORM) &&
+         mem_at(s, OP_I64_STORE, at) && loop_tail(s, CE_J, 0, 1, 0, n);
+}
+
+/* H(tag, the N words at AT) to the 4 words at DST: the kernel hash, then
+   limbs 2w and 2w + 1 of the digest joined into word w (as p2hash). */
+static int client_hash(Sink *s, uint64_t tag, uint32_t at, uint64_t n, uint32_t dst) {
+  unsigned w;
+  int ok = i64_const(s, tag) && i64_const(s, at) && i64_const(s, n) && i64_const(s, CLIENT_P2D) &&
+           i64_const(s, CLIENT_P2S) && op2(s, OP_CALL, CLIENT_P2 + KERNEL_HASH);
+  for (w = 0; w < FR_WORDS && ok; w++)
+    ok = i32_const(s, 0) && i32_const(s, 0) && mem_at(s, OP_I64_LOAD, CLIENT_P2D + 16u * w) && i32_const(s, 0) &&
+         mem_at(s, OP_I64_LOAD, CLIENT_P2D + 16u * w + 8u) && i64_const(s, 32) && put_byte(s, OP_I64_SHL) &&
+         put_byte(s, OP_I64_OR) && mem_at(s, OP_I64_STORE, dst + 8u * w);
+  return ok;
+}
+
+/* Pushes word W of the level-j sibling (32 bytes a level at PATH). */
+static int client_sib(Sink *s, uint32_t path, unsigned w) {
+  return op2(s, OP_LOCAL_GET, CE_J) && i32_const(s, 5) && put_byte(s, OP_I32_SHL) &&
+         mem_at(s, OP_I64_LOAD, path + 8u * w);
+}
+
+/* Pushes word W of the current node at ROOT. */
+static int client_cur(Sink *s, uint32_t root, unsigned w) {
+  return i32_const(s, 0) && mem_at(s, OP_I64_LOAD, root + 8u * w);
+}
+
+/* The root of zk_member_fill and zk_path_fill to the 4 words at ROOT: the
+   leaf H(2, K, 4) of the key at KEY, then for each level j the node H(3,
+   l ++ r, 8), the current node left when bit j of the idx word at IDX is 0
+   (the address local holds the bit). */
+static int client_root(Sink *s, uint32_t key, uint32_t idx, uint32_t path, uint32_t root) {
+  unsigned w;
+  int ok = client_hash(s, 2, key, FR_WORDS, root) && client_loop(s) && i32_const(s, 0) &&
+           mem_at(s, OP_I64_LOAD, idx) && op2(s, OP_LOCAL_GET, CE_J) && put_byte(s, OP_I64_EXTEND_I32_U) &&
+           put_byte(s, OP_I64_SHR_U) && i64_const(s, 1) && put_byte(s, OP_I64_AND) && put_byte(s, OP_I32_WRAP_I64) &&
+           op2(s, OP_LOCAL_SET, CE_AT);
+  for (w = 0; w < FR_WORDS && ok; w++)
+    ok = i32_const(s, 0) && client_sib(s, path, w) && client_cur(s, root, w) && op2(s, OP_LOCAL_GET, CE_AT) &&
+         put_byte(s, OP_SELECT) && mem_at(s, OP_I64_STORE, CLIENT_P2W + 8u * w) && i32_const(s, 0) &&
+         client_cur(s, root, w) && client_sib(s, path, w) && op2(s, OP_LOCAL_GET, CE_AT) && put_byte(s, OP_SELECT) &&
+         mem_at(s, OP_I64_STORE, CLIENT_P2W + 8u * (FR_WORDS + w));
+  return ok && client_hash(s, 3, CLIENT_P2W, 2u * FR_WORDS, root) && loop_tail(s, CE_J, 0, 1, 0, MERKLE_LEVELS);
+}
+
+/* vote [seed 4, pk_a 2048, pk_b 2048, m 16, w, K 4, e, u, idx, path 64]
+   (D139) -> the block [4256, root 4, nf 4, e, u, w, mask 2048, body 16, K
+   4, idx, path 64, m 16, r 32, e1 2048, e2 16] at CLIENT_VOUT. The tail
+   from w on is saved first: pkenc (count CLIENT_IN) writes its block at
+   byte 8 CLIENT_IN. Then the DRBG is replayed as pke_ballot: r (bit i at
+   word i / 64, bit i mod 64), e1 and e2. nf = H(4, K ++ e ++ u, 6). */
+static int part_client_vote(Sink *s, const void *arg) {
+  (void)arg;
+  return client_locals(s) && count_guard(s, CLIENT_VOTE_IN) &&
+         client_copy(s, CLIENT_VTAIL, 8u * CLIENT_IN, CLIENT_VOTE_IN - CLIENT_IN) && i64_const(s, CLIENT_IN) &&
+         op2(s, OP_CALL, CLIENT_ENTRY_PKENC) && op2(s, OP_LOCAL_SET, CE_H) && client_head(s, CLIENT_VOTE_OUT) &&
+         client_copy(s, client_out(11), 8u * CLIENT_IN + 8u, CLIENT_OUT) &&
+         client_root(s, CLIENT_VTAIL + 8u, CLIENT_VTAIL + 56u, CLIENT_VTAIL + 64u, client_out(0)) &&
+         client_hash(s, 4, CLIENT_VTAIL + 8u, 6, client_out(4)) && client_copy(s, client_out(8), CLIENT_VTAIL + 40u, 2) &&
+         client_copy(s, client_out(10), CLIENT_VTAIL, 1) && client_copy(s, client_out(2075), CLIENT_VTAIL + 8u, 4) &&
+         client_copy(s, client_out(2079), CLIENT_VTAIL + 56u, 65) &&
+         client_copy(s, client_out(2144), CLIENT_M, CLIENT_K) && client_drbg_reset(s) && client_loop(s) &&
+         client_j8(s) && i64_const(s, 0) && mem_at(s, OP_I64_STORE, client_out(2160)) &&
+         loop_tail(s, CE_J, 0, 1, 0, TFHE_POLY_N / 64u) && client_loop(s) && op2(s, OP_LOCAL_GET, CE_J) &&
+         i32_const(s, 6) && put_byte(s, OP_I32_SHR_U) && i32_const(s, 3) && put_byte(s, OP_I32_SHL) &&
+         op2(s, OP_LOCAL_TEE, CE_AT) && op2(s, OP_LOCAL_GET, CE_AT) && mem_at(s, OP_I64_LOAD, client_out(2160)) &&
+         i32_const(s, 1) && op2(s, OP_CALL, CLIENT_DRBG_BYTES) && i64_const(s, 1) && put_byte(s, OP_I64_AND) &&
+         op2(s, OP_LOCAL_GET, CE_J) && put_byte(s, OP_I64_EXTEND_I32_U) && put_byte(s, OP_I64_SHL) &&
+         put_byte(s, OP_I64_OR) && mem_at(s, OP_I64_STORE, client_out(2160)) &&
+         loop_tail(s, CE_J, 0, 1, 0, TFHE_POLY_N) && client_noise(s, client_out(2192), TFHE_POLY_N) &&
+         client_noise(s, client_out(4240), CLIENT_K) && i64_const(s, CLIENT_VOUT) && put_byte(s, OP_END);
+}
+
+/* motion [K 4, e, ctx 4, idx, path 64] (D140) -> the block [82, root 4, mt
+   4, e, ctx 4, K 4, idx, path 64] at CLIENT_VOUT; mt = H(6, K ++ e ++ ctx,
+   9). */
+static int part_client_motion(Sink *s, const void *arg) {
+  (void)arg;
+  return client_locals(s) && count_guard(s, CLIENT_MOTION_IN) && client_head(s, CLIENT_MOTION_OUT) &&
+         client_root(s, 0, 72, 80, client_out(0)) && client_hash(s, 6, 0, 9, client_out(4)) &&
+         client_copy(s, client_out(8), 32, 5) && client_copy(s, client_out(13), 0, 4) &&
+         client_copy(s, client_out(17), 72, 65) && i64_const(s, CLIENT_VOUT) && put_byte(s, OP_END);
+}
+
 static int part_client_types(Sink *s, const void *arg) {
   (void)arg;
-  return put_uleb(s, 4) && typed_func(s, 3, TYPE_I32, 0) && typed_func(s, 1, TYPE_I32, 1) && func_type(s, 4, 0) &&
-         typed_func(s, 1, TYPE_I64, 1);
+  return put_uleb(s, 8) && typed_func(s, 3, TYPE_I32, 0) && typed_func(s, 1, TYPE_I32, 1) && func_type(s, 4, 0) &&
+         typed_func(s, 1, TYPE_I64, 1) && func_type(s, 10, 0) && func_type(s, 3, 0) && func_type(s, 2, 0) &&
+         func_type(s, 5, 0);
 }
 
 static int part_client_functions(Sink *s, const void *arg) {
@@ -3038,17 +3179,24 @@ static int part_client_memory(Sink *s, const void *arg) {
 
 static int part_client_exports(Sink *s, const void *arg) {
   (void)arg;
-  return put_uleb(s, 2) && put_name(s, "pkenc") && put_byte(s, 0) && put_uleb(s, CLIENT_ENTRY_PKENC) &&
-         put_name(s, "memory") && put_byte(s, 2) && put_uleb(s, 0);
+  return put_uleb(s, 4) && put_name(s, "pkenc") && put_byte(s, 0) && put_uleb(s, CLIENT_ENTRY_PKENC) &&
+         put_name(s, "vote") && put_byte(s, 0) && put_uleb(s, CLIENT_ENTRY_VOTE) && put_name(s, "motion") &&
+         put_byte(s, 0) && put_uleb(s, CLIENT_ENTRY_MOTION) && put_name(s, "memory") && put_byte(s, 2) &&
+         put_uleb(s, 0);
 }
 
+/* The kernel parts get a pointer to K = CLIENT_P2; the others get NULL. */
 static int part_client_code(Sink *s, const void *arg) {
-  static const Part parts[CLIENT_FUNCS] = {part_sha512, part_client_drbg_bytes, part_client_tuniform,
-                                           part_client_poly, part_client_pkenc};
+  static const Part parts[CLIENT_FUNCS] = {part_sha512,      part_client_drbg_bytes, part_client_tuniform,
+                                           part_client_poly, part_client_pkenc,      part_reduce,
+                                           part_mul,         part_add,               part_permute,
+                                           part_hash,        part_client_vote,       part_client_motion};
+  static const uint32_t kernel = CLIENT_P2;
   size_t i;
   int ok = put_uleb(s, CLIENT_FUNCS);
   (void)arg;
-  for (i = 0; i < CLIENT_FUNCS && ok; i++) ok = sized(s, parts[i], NULL);
+  for (i = 0; i < CLIENT_FUNCS && ok; i++)
+    ok = sized(s, parts[i], i >= CLIENT_P2 && i < CLIENT_ENTRY_VOTE ? (const void *)&kernel : NULL);
   return ok;
 }
 

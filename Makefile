@@ -10,9 +10,12 @@ FRONT_TOOL = test/fronttool.c $(filter-out src/front/front.c src/front/lower.c,$
 CHECK_TOOL = test/checktool.c $(FRONT) src/front/tdec.c src/front/tkeygen.c $(TARGET) build/domain.c
 SQUASH_TOOL = test/squashtool.c src/front/squash.c src/front/tdec.c src/front/tfhe.c src/front/tshare.c src/front/sha512.c
 MPC_TOOL = test/mpctool.c src/front/tkeygen.c src/front/squash.c src/front/tdec.c src/front/fhe.c src/front/tfhe.c src/front/tshare.c src/front/sha512.c
+ZK_TOOL = test/zktool.c src/front/zk.c src/front/zkread.c src/front/squash.c src/front/tdec.c src/front/tfhe.c src/front/tshare.c src/front/sha512.c src/front/poseidon2.c src/front/tkeygen.c src/front/fhe.c
+LIG_TOOL = test/ligtool.c src/front/fr.c src/front/ntt.c src/front/merkle.c src/front/lig.c $(filter-out test/zktool.c,$(ZK_TOOL))
+LIG_ZK = $(ZK_TOOL) src/front/fr.c src/front/ntt.c src/front/merkle.c src/front/lig.c
 HEADERS = $(wildcard src/*.h src/front/*.h)
 
-.PHONY: build check check-clang check-squash check-mpc clean
+.PHONY: build check check-clang check-lig check-squash check-mpc clean
 
 build: build/langc build/fronttool
 
@@ -30,6 +33,10 @@ build/fronttool: $(FRONT_TOOL) $(HEADERS)
 build/checktool: $(CHECK_TOOL) src/main.c $(HEADERS)
 	$(TCC) $(CFLAGS) -o build/checktool $(CHECK_TOOL)
 
+build/zktool: $(ZK_TOOL) $(HEADERS)
+	mkdir -p build
+	$(TCC) $(CFLAGS) -o build/zktool $(ZK_TOOL)
+
 build/squashtool: $(SQUASH_TOOL) $(HEADERS)
 	mkdir -p build
 	$(CC) $(CFLAGS) -O2 -o build/squashtool $(SQUASH_TOOL)
@@ -38,18 +45,49 @@ build/mpctool: $(MPC_TOOL) $(HEADERS)
 	mkdir -p build
 	$(CC) $(CFLAGS) -O2 -o build/mpctool $(MPC_TOOL)
 
+# The Ligero back end (S7 L1 on): the unit rows of fr, ntt and merkle, cc -O2.
+build/ligtool: $(LIG_TOOL) $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -O2 -o build/ligtool $(LIG_TOOL)
+
+# The second build of test/zktool.c: the Ligero rows at the finish point (S7 L4, Q-CL-1), cc -O2.
+build/ligzk: $(LIG_ZK) $(HEADERS)
+	mkdir -p build
+	$(CC) $(CFLAGS) -O2 -DZK_LIG -o build/ligzk $(LIG_ZK)
+
 check-clang: build/domain.c
 	$(CC) $(CLANG_FLAGS) $(SRC) build/domain.c
 	$(CC) $(CLANG_FLAGS) $(FRONT_TOOL)
 	$(CC) $(CLANG_FLAGS) $(CHECK_TOOL)
 	$(CC) $(CLANG_FLAGS) $(SQUASH_TOOL)
 	$(CC) $(CLANG_FLAGS) $(MPC_TOOL)
+	$(CC) $(CLANG_FLAGS) $(ZK_TOOL)
+	$(CC) $(CLANG_FLAGS) $(LIG_TOOL)
+	$(CC) $(CLANG_FLAGS) -DZK_LIG $(LIG_ZK)
 
-check: build/langc build/fronttool build/checktool check-clang
+# The client Wasm module (S7 U7, D152): the words source of the zktool client rows.
+build/tfhe-client.wasm: build/checktool
+	build/checktool --tfhe-client build/tfhe-client.wasm
+
+check: build/langc build/fronttool build/checktool build/zktool build/ligtool build/tfhe-client.wasm check-clang
 	sh test/gate.sh
 	sh test/review.sh
 	build/fronttool
 	build/checktool
+	build/zktool
+	build/ligtool
+
+# The gadget rows of the Ligero back end (S7 L4, Q-CL-3, Q-CL-4): the rows mode, then the modes member, full,
+# pke, split and keygen; a record only; check does not run it.
+check-lig: build/ligzk build/tfhe-client.wasm
+	build/ligzk
+	build/ligzk member
+	build/ligzk full
+	build/ligzk pke
+	build/ligzk split
+	build/ligzk keygen
+	build/ligzk cases
+	build/ligzk client
 
 # The squash PBS rows (the 812 MB squash BSK, cc -O2): not in check (Q-S6-13).
 check-squash: build/squashtool
